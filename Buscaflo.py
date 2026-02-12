@@ -9,7 +9,7 @@ from collections import Counter
 
 # --- CONFIGURACIÓN DE LA RUTA_RELATIVA ---
 # Asegúrate de que el archivo flotodo.csv esté en la misma carpeta
-RUTA_CSV = 'flotodo.csv' 
+RUTA_CSV = 'Flotodo.csv' 
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
@@ -232,4 +232,5 @@ def main():
                 """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
+
     main()
