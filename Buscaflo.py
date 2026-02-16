@@ -18,7 +18,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🚤 Flotodo - Suite de Análisis Avanzado")
+st.title("🚤 Flotodo - Suite de Análisis Avanzado (Corregido)")
 
 # --- FUNCIÓN PARA CARGAR DATOS ---
 @st.cache_resource
@@ -42,7 +42,6 @@ def cargar_datos_flotodo(_ruta_csv):
         df_fijos = df_fijos.rename(columns={'Fijo': 'Numero'})
         df_fijos['Numero'] = pd.to_numeric(df_fijos['Numero'], errors='coerce').astype(int)
         
-        # Orden: Tarde (0) luego Noche (1)
         draw_order_map = {'T': 0, 'N': 1} 
         df_fijos['draw_order'] = df_fijos['Tipo_Sorteo'].map(draw_order_map).fillna(2)
         df_fijos['sort_key'] = df_fijos['Fecha'] + pd.to_timedelta(df_fijos['draw_order'], unit='h')
@@ -63,10 +62,8 @@ def analizar_siguientes(df_fijos, numero_busqueda, ventana_sorteos):
     c = Counter(lista_s)
     r = pd.DataFrame.from_dict(c, orient='index', columns=['Frecuencia'])
     r['Probabilidad (%)'] = (r['Frecuencia'] / sum(lista_s) * 100).round(2) if lista_s else 0
-    
-    # --- CORRECCIÓN: List comprehension para compatibilidad ---
+    # CORRECCIÓN LIST COMPREHENSION
     r['Número'] = [f"{int(x):02d}" for x in r.index]
-    
     return r.sort_values('Frecuencia', ascending=False), len(indices)
 
 # --- FUNCIÓN 2: ALMANAQUE ---
@@ -228,13 +225,11 @@ def main():
             if not l.empty:
                 f = l['Fecha'].max(); n = l[l['Fecha']==f]['Numero'].values[0]
                 st.metric(f"{ic} {i}", f"{f.strftime('%d/%m')}", delta=f"{n:02d}")
-        # SOLO TARDE Y NOCHE
         m(df[df['Tipo_Sorteo']=='T'], "Tarde", "🌞")
         m(df[df['Tipo_Sorteo']=='N'], "Noche", "🌙")
 
     with st.sidebar.expander("📝 Agregar Sorteo", expanded=False):
         f = st.date_input("Fecha:", datetime.now().date(), format="DD/MM/YYYY", label_visibility="collapsed")
-        # SOLO TARDE Y NOCHE
         s = st.radio("Sesión:", ["Tarde (T)", "Noche (N)"], horizontal=True, label_visibility="collapsed")
         c1, c2 = st.columns(2)
         with c1: fj = st.number_input("Fijo", 0, 99, 0, format="%02d", label_visibility="collapsed")
@@ -250,7 +245,6 @@ def main():
     st.sidebar.markdown("---")
     if st.sidebar.button("🔄"): st.cache_resource.clear(); st.rerun()
     st.sidebar.subheader("🎲 Modo de Análisis")
-    # SOLO GENERAL, TARDE Y NOCHE
     modo = st.sidebar.radio("Filtro:", ["General", "Solo Tarde (T)", "Solo Noche (N)"])
     
     if "Tarde" in modo: dfa = df[df['Tipo_Sorteo']=='T'].copy(); t="Tarde"
@@ -342,7 +336,8 @@ def main():
         st.subheader(f"Secuencia: {t}")
         c1, c2, c3 = st.columns(3)
         with c1: part = st.selectbox("Parte:", ["Decena", "Unidad"])
-        with c2: type_ = st.selectbox("Análisis:", ["Dígito (0-9)", "Paridad (P/I)", "Altura (A/B)"])
+        # --- CORRECCIÓN AQUÍ: Eliminado acento en "Digito" para que coincida con el código ---
+        with c2: type_ = st.selectbox("Análisis:", ["Digito (0-9)", "Paridad (P/I)", "Altura (A/B)"])
         with c3: seq = st.text_input("Secuencia:")
         if st.button("🔗", key="b_seq"): st.session_state['sseq'] = True
         if st.session_state.get('sseq') and seq:
