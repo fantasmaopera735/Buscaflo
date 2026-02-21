@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
 # --- CONFIGURACIÓN DE LA RUTA RELATIVA ---
-RUTA_CSV = 'Flotodo.csv' 
+RUTA_CSV = 'flotodo.csv' 
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
@@ -986,3 +986,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
