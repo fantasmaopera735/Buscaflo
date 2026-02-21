@@ -9,10 +9,8 @@ from collections import Counter
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
-# --- CONFIGURACIÓN DE LA RUTA RELATIVA ---
-RUTA_CSV = 'flotodo.csv' 
+RUTA_CSV = 'Flotodo.csv'
 
-# --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
     page_title="Flotodo - Suite Ultimate",
     page_icon="🎲",
@@ -21,24 +19,20 @@ st.set_page_config(
 
 st.title("🎲 Flotodo - Suite Ultimate")
 
-# --- FUNCIÓN PARA CARGAR DATOS ---
 @st.cache_resource
 def cargar_datos_flotodo(_ruta_csv):
     try:
         if not os.path.exists(_ruta_csv):
             st.error(f"❌ Error: No se encontró el archivo {_ruta_csv}.")
-            st.info("💡 Asegúrate de que el archivo CSV esté en el mismo directorio que este script.")
             st.stop()
         
         df = pd.read_csv(_ruta_csv, sep=';', encoding='latin-1')
         
-        # Verificar columnas necesarias
         columnas_requeridas = ['Fecha']
         if not all(col in df.columns for col in columnas_requeridas):
             if 'Fecha' not in df.columns and len(df.columns) > 0:
                 df.columns = ['Fecha', 'Tipo_Sorteo', 'Fijo', 'Primer_Corrido', 'Segundo_Corrido'] + list(df.columns[5:])
         
-        # Renombrar columnas si es necesario
         rename_map = {}
         cols = df.columns.tolist()
         for col in cols:
@@ -79,7 +73,7 @@ def cargar_datos_flotodo(_ruta_csv):
             st.error("❌ No se encontró la columna 'Fijo' en el archivo CSV.")
             st.stop()
         
-        # Orden: T (0), N (1) - N es más reciente
+        # Orden: N (más reciente) > T
         draw_order_map = {'T': 0, 'N': 1, 'OTRO': 2}
         df_fijos['draw_order'] = df_fijos['Tipo_Sorteo'].map(draw_order_map).fillna(2)
         df_fijos['sort_key'] = df_fijos['Fecha'] + pd.to_timedelta(df_fijos['draw_order'], unit='h')
@@ -94,7 +88,7 @@ def cargar_datos_flotodo(_ruta_csv):
         st.error(f"❌ Error cargando datos: {e}")
         st.stop()
 
-# --- FUNCIÓN 1: PATRONES ---
+# --- FUNCIÓN PATRONES ---
 def analizar_siguientes(df_fijos, numero_busqueda, ventana_sorteos):
     indices = df_fijos[df_fijos['Numero'] == numero_busqueda].index.tolist()
     if not indices: 
@@ -116,7 +110,7 @@ def analizar_siguientes(df_fijos, numero_busqueda, ventana_sorteos):
     r['Número'] = [f"{int(x):02d}" for x in r.index]
     return r.sort_values('Frecuencia', ascending=False), len(indices)
 
-# --- FUNCIÓN 2: ALMANAQUE (ORDEN N-T) ---
+# --- FUNCIÓN ALMANAQUE (ORIGINAL) ---
 def analizar_almanaque(df_fijos, dia_inicio, dia_fin, meses_atras, strict_mode=True):
     fecha_hoy = datetime.now()
     
@@ -188,7 +182,6 @@ def analizar_almanaque(df_fijos, dia_inicio, dia_fin, meses_atras, strict_mode=T
         fallback_usado = True
         mensaje_advertencia = "(Usando datos del mes completo)."
     
-    # Procesar datos
     df_total = pd.concat(bloques_validos)
     df_total['Decena'] = df_total['Numero'] // 10
     df_total['Unidad'] = df_total['Numero'] % 10
@@ -258,7 +251,6 @@ def analizar_almanaque(df_fijos, dia_inicio, dia_fin, meses_atras, strict_mode=T
     persistentes_perfiles = set.intersection(*sets_perfiles) if sets_perfiles else set()
     persistentes_num_set = set(p['Número'] for p in pers_num) if pers_num else set()
 
-    # Evaluar mes actual - ORDEN N-T
     hoy = datetime.now()
     estado_periodo = ""
     df_historial_actual = pd.DataFrame()
@@ -303,7 +295,7 @@ def analizar_almanaque(df_fijos, dia_inicio, dia_fin, meses_atras, strict_mode=T
                 
                 df_historial_actual = pd.DataFrame(historial_data)
                 
-                # ORDENAR: N (más reciente) > T (menos reciente)
+                # ORDEN: N > T
                 orden_sorteo = {'N': 0, 'T': 1, 'OTRO': 2}
                 df_historial_actual['orden'] = df_historial_actual['Tipo_Sorteo'].map(orden_sorteo).fillna(2)
                 df_historial_actual = df_historial_actual.sort_values(
@@ -317,7 +309,6 @@ def analizar_almanaque(df_fijos, dia_inicio, dia_fin, meses_atras, strict_mode=T
         estado_periodo = f"⚪ Error en fechas: {str(e)}"
         df_historial_actual = pd.DataFrame()
 
-    # Calcular faltantes
     df_faltantes = pd.DataFrame()
     
     if "ACTIVO" in estado_periodo:
@@ -355,7 +346,7 @@ def analizar_almanaque(df_fijos, dia_inicio, dia_fin, meses_atras, strict_mode=T
         'fallback_usado': fallback_usado
     }
 
-# --- FUNCIÓN 5: BACKTESTING ---
+# --- FUNCIÓN BACKTESTING ---
 def backtesting_estrategia_congelada(df_fijos, mes_objetivo, anio_objetivo, dia_ini, dia_fin, meses_atras):
     try:
         fecha_ref = datetime(anio_objetivo, mes_objetivo, 1)
@@ -471,7 +462,7 @@ def backtesting_estrategia_congelada(df_fijos, mes_objetivo, anio_objetivo, dia_
     except Exception as e:
         return None, f"Error: {str(e)}"
 
-# --- FUNCIÓN 6: ESTABILIDAD ---
+# --- FUNCIÓN ESTABILIDAD ---
 def analizar_estabilidad_numeros(df_fijos, dias_analisis=365):
     fecha_limite = datetime.now() - timedelta(days=dias_analisis)
     df_historico = df_fijos[df_fijos['Fecha'] >= fecha_limite].copy()
@@ -531,6 +522,161 @@ def analizar_estabilidad_numeros(df_fijos, dias_analisis=365):
     df_est = df_est.sort_values(by=['Gap Máximo (Días)', 'Desviación (Irregularidad)'], ascending=[True, True]).reset_index(drop=True)
     return df_est
 
+# --- FUNCIÓN TRANSFERENCIA (FLOTODO: T->N y N->T) ---
+def analizar_transferencia_ciclos(df_completo, dias_atras=180):
+    """
+    Analiza transferencia decena->unidad para FLOTODO:
+    - T->N: Decena Tarde → Unidad Noche (mismo día)
+    - N->T: Decena Noche → Unidad Tarde (día siguiente)
+    
+    Con LÓGICA DE CICLOS y DOBLE PREDICCIÓN
+    """
+    fecha_hoy = datetime.now()
+    fecha_inicio = fecha_hoy - timedelta(days=dias_atras)
+    
+    df_filtrado = df_completo[df_completo['Fecha'] >= fecha_inicio].copy()
+    fechas_unicas = sorted(df_filtrado['Fecha'].dt.date.unique())
+    
+    # Registrar eventos
+    eventos = {
+        'T->N': [],  # Decena Tarde → Unidad Noche (mismo día)
+        'N->T': []   # Decena Noche → Unidad Tarde (día siguiente)
+    }
+    
+    for i, fecha in enumerate(fechas_unicas):
+        df_dia = df_filtrado[df_filtrado['Fecha'].dt.date == fecha]
+        
+        fijo_T = df_dia[df_dia['Tipo_Sorteo'] == 'T']['Numero'].values
+        fijo_N = df_dia[df_dia['Tipo_Sorteo'] == 'N']['Numero'].values
+        
+        # T->N (mismo día)
+        if len(fijo_T) > 0 and len(fijo_N) > 0:
+            decena_T = int(fijo_T[0]) // 10
+            unidad_N = int(fijo_N[0]) % 10
+            if decena_T == unidad_N:
+                eventos['T->N'].append({'fecha': fecha, 'digito': decena_T})
+        
+        # N->T (día siguiente)
+        if len(fijo_N) > 0 and i < len(fechas_unicas) - 1:
+            fecha_siguiente = fechas_unicas[i + 1]
+            df_siguiente = df_filtrado[df_filtrado['Fecha'].dt.date == fecha_siguiente]
+            fijo_T_sig = df_siguiente[df_siguiente['Tipo_Sorteo'] == 'T']['Numero'].values
+            
+            if len(fijo_T_sig) > 0:
+                decena_N = int(fijo_N[0]) // 10
+                unidad_T_sig = int(fijo_T_sig[0]) % 10
+                if decena_N == unidad_T_sig:
+                    eventos['N->T'].append({'fecha': fecha, 'digito': decena_N})
+    
+    # Calcular estadísticas con lógica de ciclos
+    fecha_hoy_date = fecha_hoy.date()
+    stats = []
+    
+    for tipo, eventos_lista in eventos.items():
+        if len(eventos_lista) >= 2:
+            # Calcular gaps entre eventos
+            gaps = []
+            for j in range(1, len(eventos_lista)):
+                gap = (eventos_lista[j]['fecha'] - eventos_lista[j-1]['fecha']).days
+                gaps.append(gap)
+            
+            # Promedio histórico (todos los gaps)
+            promedio_historico = round(np.mean(gaps), 1) if gaps else 0
+            ausencia_maxima = max(gaps) if gaps else 0
+            
+            # SECUENCIA RECIENTE (últimos 2 gaps)
+            if len(gaps) >= 2:
+                secuencia_reciente = round(np.mean(gaps[-2:]), 1)
+                ultimo_gap = gaps[-1]
+            else:
+                secuencia_reciente = gaps[0] if gaps else promedio_historico
+                ultimo_gap = gaps[-1] if gaps else 0
+            
+            # Detectar tipo de secuencia
+            if secuencia_reciente < promedio_historico * 0.7:  # 30% más rápido
+                tipo_secuencia = "ACELERADO"
+                prediccion_dias = secuencia_reciente
+            elif secuencia_reciente > promedio_historico * 1.3:  # 30% más lento
+                tipo_secuencia = "LENTO"
+                prediccion_dias = secuencia_reciente
+            else:
+                tipo_secuencia = "NORMAL"
+                prediccion_dias = promedio_historico
+            
+            # Último evento
+            ultimo_evento = eventos_lista[-1]
+            ultima_fecha = ultimo_evento['fecha']
+            ultimo_digito = ultimo_evento['digito']
+            dias_sin_evento = (fecha_hoy_date - ultima_fecha).days
+            
+            # LÓGICA DE CICLOS
+            if dias_sin_evento > promedio_historico * 3:
+                estado_ciclo = "REINICIAR - Esperar primera vez"
+                alerta = False
+                repeticion = 0
+                dias_estimados = prediccion_dias
+            elif dias_sin_evento >= prediccion_dias:
+                estado_ciclo = "ALERTA - Puede repetir"
+                alerta = True
+                repeticion = len(eventos_lista)
+                dias_estimados = max(0, round(prediccion_dias - dias_sin_evento, 0))
+            else:
+                estado_ciclo = "EN CICLO - Aún no toca"
+                alerta = False
+                repeticion = len(eventos_lista)
+                dias_estimados = round(prediccion_dias - dias_sin_evento, 0)
+            
+            frecuencia = len(eventos_lista)
+            
+        elif len(eventos_lista) == 1:
+            ultimo_evento = eventos_lista[0]
+            ultima_fecha = ultimo_evento['fecha']
+            ultimo_digito = ultimo_evento['digito']
+            dias_sin_evento = (fecha_hoy_date - ultima_fecha).days
+            promedio_historico = 0
+            secuencia_reciente = 0
+            ausencia_maxima = dias_sin_evento
+            frecuencia = 1
+            tipo_secuencia = "SIN DATOS"
+            estado_ciclo = "PRIMERA VEZ - Esperar para segunda"
+            alerta = False
+            repeticion = 1
+            prediccion_dias = 0
+            dias_estimados = 0
+        else:
+            frecuencia = 0
+            dias_sin_evento = 999
+            promedio_historico = 0
+            secuencia_reciente = 0
+            ausencia_maxima = 999
+            ultima_fecha = None
+            ultimo_digito = None
+            tipo_secuencia = "SIN DATOS"
+            estado_ciclo = "SIN EVENTOS - Esperar primera vez"
+            alerta = False
+            repeticion = 0
+            prediccion_dias = 0
+            dias_estimados = 0
+        
+        stats.append({
+            'Transferencia': tipo,
+            'Frecuencia': frecuencia,
+            'Promedio_Historico': promedio_historico,
+            'Secuencia_Reciente': secuencia_reciente if isinstance(secuencia_reciente, (int, float)) else 0,
+            'Tipo_Secuencia': tipo_secuencia,
+            'Prediccion_Dias': prediccion_dias if isinstance(prediccion_dias, (int, float)) else 0,
+            'Ausencia_Max': ausencia_maxima,
+            'Dias_Sin_Evento': dias_sin_evento if ultima_fecha else 'N/A',
+            'Dias_Estimados': dias_estimados,
+            'Ultima_Fecha': ultima_fecha.strftime('%d/%m/%Y') if ultima_fecha else 'N/A',
+            'Ultimo_Digito': ultimo_digito if ultimo_digito is not None else 'N/A',
+            'Estado_Ciclo': estado_ciclo,
+            'Alerta': alerta,
+            'Proxima_Repeticion': repeticion + 1 if repeticion > 0 else 1
+        })
+    
+    return pd.DataFrame(stats), eventos
+
 # --- FUNCIONES AUXILIARES ---
 def generar_sugerencia(df, dias, gap):
     fh = datetime.now()
@@ -550,7 +696,6 @@ def generar_sugerencia(df, dias, gap):
                 res.append({'Número': f"{n:02d}", 'Gap': g, 'Estado': "⚡ Muy" if g > gap*1.5 else "✅ Op"})
     return pd.DataFrame(res).sort_values('Gap', ascending=False) if res else pd.DataFrame()
 
-# --- FUNCIÓN DE BÚSQUEDA DE SECUENCIA ---
 def buscar_seq(df_fijos, part, type_, seq):
     try:
         p = [x.strip().upper() for x in seq.replace(',', ' ').split() if x.strip()]
@@ -651,7 +796,6 @@ def main():
 
     with st.sidebar.expander("📝 Agregar", expanded=False):
         f = st.date_input("Fecha:", datetime.now().date(), format="DD/MM/YYYY", label_visibility="collapsed")
-        # Solo Tarde y Noche
         s = st.radio("Sesión:", ["Tarde (T)", "Noche (N)"], horizontal=True, label_visibility="collapsed")
         c1, c2 = st.columns(2)
         with c1: 
@@ -678,7 +822,6 @@ def main():
         st.rerun()
     
     st.sidebar.subheader("🎲 Modo")
-    # Solo General, Tarde y Noche
     modo = st.sidebar.radio("Filtro:", ["General", "Tarde", "Noche"])
     
     if modo == "Tarde":
@@ -695,10 +838,93 @@ def main():
         st.warning(f"⚠️ No hay datos para: {t}")
         st.stop()
     
-    tabs = st.tabs(["🔍 Patrones", "📅 Almanaque", "🧠 Propuesta", "🔗 Secuencia", "🧪 Laboratorio", "📉 Estabilidad"])
+    tabs = st.tabs(["🔄 Transferencia", "🔍 Patrones", "📅 Almanaque", "🧠 Propuesta", "🔗 Secuencia", "🧪 Laboratorio", "📉 Estabilidad"])
 
-    # PESTAÑA 0: PATRONES
+    # PESTAÑA 0: TRANSFERENCIA
     with tabs[0]:
+        st.subheader("🔄 Transferencia Decena → Unidad")
+        st.markdown("**Analiza cuando la decena de un sorteo pasa como unidad al siguiente (con ciclos)**")
+        st.info("T→N: Decena Tarde → Unidad Noche (mismo día) | N→T: Decena Noche → Unidad Tarde (día siguiente)")
+        
+        st.markdown("### Lógica de Ciclos")
+        st.markdown("""
+        - **1ra vez**: El evento ocurre → Se marca el ciclo (NO se apuesta)
+        - **2da vez**: Puede repetir → **ALERTA: apostar**
+        - **3ra vez**: Puede repetir → **ALERTA: apostar**
+        - **Si se aleja 3x del promedio**: Reiniciar ciclo, esperar 1ra vez
+        - **ACELERADO**: Secuencia actual más rápida que el promedio → usar secuencia reciente
+        """)
+        
+        dias_stats = st.slider("Días de historial:", 30, 365, 90, key="trans_stats")
+        
+        if st.button("Analizar Transferencias", type="primary", key="btn_trans"):
+            with st.spinner("Analizando..."):
+                df_stats, eventos = analizar_transferencia_ciclos(df, dias_stats)
+            
+            for _, row in df_stats.iterrows():
+                # Mostrar tipo de secuencia con DOBLE PREDICCIÓN
+                tipo_sec = row['Tipo_Secuencia']
+                promedio_hist = row['Promedio_Historico']
+                secuencia_rec = row['Secuencia_Reciente']
+                prediccion = row['Prediccion_Dias']
+                
+                st.markdown(f"### 📊 **{row['Transferencia']}**")
+                
+                # Siempre mostrar AMBAS predicciones
+                col_pred1, col_pred2 = st.columns(2)
+                with col_pred1:
+                    st.metric("📅 Por Promedio Histórico", f"{promedio_hist} días")
+                with col_pred2:
+                    st.metric("⚡ Por Tendencia de Racha", f"{secuencia_rec} días")
+                
+                if tipo_sec == "ACELERADO":
+                    st.warning(f"⚡ **ACELERADO**: La racha va más rápido que el promedio. Usar predicción de racha ({secuencia_rec} días)")
+                    st.markdown(f"🎯 **Predicción recomendada**: cada **{prediccion}** días (según racha actual)")
+                elif tipo_sec == "LENTO":
+                    st.info(f"🐢 **LENTO**: La racha va más lento que el promedio. Considerar predicción de racha ({secuencia_rec} días)")
+                else:
+                    st.success(f"✅ **NORMAL**: Secuencia estable, usar promedio histórico ({promedio_hist} días)")
+                
+                if row['Alerta']:
+                    if row['Transferencia'] == 'T->N':
+                        ultimo_T = df[df['Tipo_Sorteo'] == 'T'].iloc[-1] if len(df[df['Tipo_Sorteo'] == 'T']) > 0 else None
+                        if ultimo_T is not None:
+                            decena_actual = int(ultimo_T['Numero']) // 10
+                            nums_sugeridos = [f"{d*10 + decena_actual:02d}" for d in range(10)]
+                            fecha_T = ultimo_T['Fecha'].strftime('%d/%m/%Y')
+                            
+                            st.success(f"✅ **{row['Transferencia']}** - ALERTA: Puede repetir ({row['Proxima_Repeticion']}ª vez)")
+                            st.markdown(f"📅 Último evento: {row['Ultima_Fecha']} (dígito {row['Ultimo_Digito']})")
+                            st.markdown(f"📊 Sin evento hace: {row['Dias_Sin_Evento']} días | Predicción: cada {row['Prediccion_Dias']} días")
+                            st.markdown(f"🎯 **Fijo Tarde del {fecha_T}: {int(ultimo_T['Numero']):02d}** → Decena: **{decena_actual}**")
+                            st.markdown(f"💰 **Jugar en NOCHE números terminados en {decena_actual}:** {', '.join(nums_sugeridos)}")
+                    
+                    elif row['Transferencia'] == 'N->T':
+                        ultimo_N = df[df['Tipo_Sorteo'] == 'N'].iloc[-1] if len(df[df['Tipo_Sorteo'] == 'N']) > 0 else None
+                        if ultimo_N is not None:
+                            decena_actual = int(ultimo_N['Numero']) // 10
+                            nums_sugeridos = [f"{d*10 + decena_actual:02d}" for d in range(10)]
+                            fecha_N = ultimo_N['Fecha'].strftime('%d/%m/%Y')
+                            
+                            st.success(f"✅ **{row['Transferencia']}** - ALERTA: Puede repetir ({row['Proxima_Repeticion']}ª vez)")
+                            st.markdown(f"📅 Último evento: {row['Ultima_Fecha']} (dígito {row['Ultimo_Digito']})")
+                            st.markdown(f"📊 Sin evento hace: {row['Dias_Sin_Evento']} días | Predicción: cada {row['Prediccion_Dias']} días")
+                            st.markdown(f"🎯 **Fijo Noche del {fecha_N}: {int(ultimo_N['Numero']):02d}** → Decena: **{decena_actual}**")
+                            st.markdown(f"💰 **Jugar en TARDE (día siguiente) números terminados en {decena_actual}:** {', '.join(nums_sugeridos)}")
+                
+                else:
+                    st.info(f"⏳ **{row['Transferencia']}** - {row['Estado_Ciclo']}")
+                    st.markdown(f"📅 Último evento: {row['Ultima_Fecha']} | Días sin evento: {row['Dias_Sin_Evento']}")
+                    if row['Dias_Estimados'] > 0:
+                        st.markdown(f"⏰ **Faltan aproximadamente {row['Dias_Estimados']} días** según secuencia {'reciente' if row['Tipo_Secuencia'] == 'ACELERADO' else 'histórica'}")
+                
+                st.markdown("---")
+            
+            with st.expander("Ver tabla completa"):
+                st.dataframe(df_stats, hide_index=True)
+
+    # PESTAÑA 1: PATRONES
+    with tabs[1]:
         st.subheader(f"🔍 Patrones: {t}")
         c1, c2 = st.columns(2)
         with c1: 
@@ -720,8 +946,8 @@ def main():
                     "Frecuencia": st.column_config.ProgressColumn("Frecuencia", format="%d", min_value=0, max_value=max_val)
                 }, hide_index=True)
 
-    # PESTAÑA 1: ALMANAQUE
-    with tabs[1]:
+    # PESTAÑA 2: ALMANAQUE
+    with tabs[2]:
         st.subheader(f"📅 Almanaque: {t}")
         
         with st.form("almanaque_form"):
@@ -826,8 +1052,8 @@ def main():
                             if not res['df_rank'].empty:
                                 st.dataframe(res['df_rank'].head(20), hide_index=True)
 
-    # PESTAÑA 2: PROPUESTA
-    with tabs[2]:
+    # PESTAÑA 3: PROPUESTA
+    with tabs[3]:
         st.subheader(f"🧠 Sincronización: {t}")
         c1, c2 = st.columns(2)
         with c1: 
@@ -845,8 +1071,8 @@ def main():
             else:
                 st.dataframe(p, hide_index=True)
 
-    # PESTAÑA 3: SECUENCIA
-    with tabs[3]:
+    # PESTAÑA 4: SECUENCIA
+    with tabs[4]:
         st.subheader(f"🔗 Secuencia: {t}")
         c1, c2, c3 = st.columns(3)
         with c1: 
@@ -873,8 +1099,8 @@ def main():
                     "Ejemplos": st.column_config.TextColumn("Historial")
                 }, hide_index=True)
 
-    # PESTAÑA 4: LABORATORIO
-    with tabs[4]:
+    # PESTAÑA 5: LABORATORIO
+    with tabs[5]:
         st.subheader("🧪 Simulador")
         
         meses_lab = {1:"Enero", 2:"Febrero", 3:"Marzo", 4:"Abril", 5:"Mayo", 6:"Junio", 
@@ -954,8 +1180,8 @@ def main():
                 else:
                     st.error(f"🛑 {res}")
 
-    # PESTAÑA 5: ESTABILIDAD
-    with tabs[5]:
+    # PESTAÑA 6: ESTABILIDAD
+    with tabs[6]:
         st.subheader(f"📉 Estabilidad: {t}")
         
         dias_analisis = st.slider("Días de Historial:", 90, 3650, 365, step=30, key="est_dias")
@@ -986,5 +1212,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
