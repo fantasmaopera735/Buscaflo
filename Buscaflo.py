@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
-RUTA_CSV = 'Flotodo.csv'
+RUTA_CSV = 'flotodo.csv'
 
 st.set_page_config(
     page_title="Flotodo - Suite Ultimate",
@@ -1556,3 +1556,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
