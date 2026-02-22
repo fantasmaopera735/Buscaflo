@@ -154,8 +154,44 @@ def cargar_datos_flotodo(_ruta_csv):
         if 'Centena' not in df.columns:
             df['Centena'] = 0
         
-        # Convertir fecha
-        df['Fecha'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce')
+        # Convertir fecha con multiples formatos
+        def convertir_fecha(valor):
+            """Intenta convertir fecha con diferentes formatos"""
+            if pd.isna(valor):
+                return pd.NaT
+            
+            valor_str = str(valor).strip()
+            
+            # Lista de formatos a intentar
+            formatos = [
+                '%d/%m/%Y',    # 01/12/2024
+                '%d-%m-%Y',    # 01-12-2024
+                '%Y-%m-%d',    # 2024-12-01
+                '%d/%m/%y',    # 01/12/24
+                '%d-%m-%y',    # 01-12-24
+                '%Y/%m/%d',    # 2024/12/01
+            ]
+            
+            for fmt in formatos:
+                try:
+                    return pd.to_datetime(valor_str, format=fmt)
+                except:
+                    continue
+            
+            # Si ningun formato funciona, intentar con pandas automatico
+            try:
+                return pd.to_datetime(valor_str, dayfirst=True)
+            except:
+                return pd.NaT
+        
+        # Aplicar conversion de fecha
+        df['Fecha'] = df['Fecha'].apply(convertir_fecha)
+        
+        # Contar fechas invalidas
+        fechas_invalidas = df['Fecha'].isna().sum()
+        if fechas_invalidas > 0:
+            st.warning(f"Se encontraron {fechas_invalidas} fechas con formato invalido que fueron omitidas.")
+        
         df.dropna(subset=['Fecha'], inplace=True)
         
         # Normalizar tipo de sorteo
