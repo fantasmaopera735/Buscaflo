@@ -13,11 +13,11 @@ RUTA_CSV = 'flotodo.csv'
 
 st.set_page_config(
     page_title="Flotodo - Suite Ultimate",
-    page_icon="🎰",
+    page_icon="🦩", # Logo Flamenco (Florida Lottery)
     layout="wide"
 )
 
-st.title("🎰 Flotodo - Suite Ultimate")
+st.title("🦩 Flotodo - Suite Ultimate 🔍")
 
 @st.cache_resource
 def cargar_datos_flotodo(_ruta_csv):
@@ -36,15 +36,10 @@ def cargar_datos_flotodo(_ruta_csv):
         else:
             separador = ';'
         
-        # CAMBIO IMPORTANTE: Se agrega on_bad_lines='skip' para ignorar filas con errores de columnas
         df = pd.read_csv(_ruta_csv, sep=separador, encoding='utf-8-sig', dtype=str, on_bad_lines='skip')
         
         df.columns = [col.strip().replace('\ufeff', '') for col in df.columns]
         st.info(f"Columnas detectadas: {list(df.columns)}")
-        
-        # ... (el resto de la función sigue igual) ...
-        
-        # (El código completo abajo incluye todo el resto de la lógica interna)
         
         col_fecha = col_tipo = col_centena = col_fijo = col_1er = col_2do = None
         
@@ -668,11 +663,8 @@ def analizar_estabilidad_numeros(df_fijos, dias_analisis=365):
     df_est = df_est.sort_values(by=['Gap Máximo (Días)', 'Desviación (Irregularidad)'], ascending=[True, True]).reset_index(drop=True)
     return df_est
 
-# --- NUEVA FUNCIÓN: FALTANTES DEL MES ---
 def analizar_faltantes_mes(df_fijos, mes, anio, sorteos_freq):
     hoy = datetime.now()
-    
-    # 1. Determinar números salidos en el mes
     fecha_inicio_mes = datetime(anio, mes, 1)
     last_day = calendar.monthrange(anio, mes)[1]
     fecha_fin_mes = datetime(anio, mes, last_day)
@@ -687,28 +679,23 @@ def analizar_faltantes_mes(df_fijos, mes, anio, sorteos_freq):
     if not faltantes:
         return pd.DataFrame(), "Todos los números salieron.", pd.DataFrame()
     
-    # 2. Estabilidad (Último año)
     df_estabilidad = analizar_estabilidad_numeros(df_fijos, 365)
     est_map = {}
     if df_estabilidad is not None:
         for _, row in df_estabilidad.iterrows():
             est_map[row['Número']] = {'Gap': row['Gap Actual'], 'Estado': row['Estado']}
 
-    # 3. Frecuencia (Basado en el slider de sorteos)
     df_reciente = df_fijos.tail(sorteos_freq)
     conteo = df_reciente['Numero'].value_counts()
-    top_frecuencia = conteo.head(25).index.tolist() # Top 25
+    top_frecuencia = conteo.head(25).index.tolist()
     
-    # 4. Construir Lista
     resultados = []
     for num in faltantes:
         est_data = est_map.get(f"{num:02d}", {'Gap': 999, 'Estado': 'SIN DATOS'})
         es_vencido = ("VENCIDO" in est_data['Estado'])
-        
         es_favorito = (num in top_frecuencia)
         freq_val = conteo.get(num, 0)
         
-        # Lógica OR
         if es_vencido or es_favorito:
             prioridad = "🔴 ALTA"
             razones = []
@@ -802,24 +789,42 @@ def analizar_transferencia_flotodo(df_completo, dias_atras=180):
     
     for i, fecha in enumerate(fechas_unicas):
         df_dia = df_filtrado[df_filtrado['Fecha'].dt.date == fecha]
-        fijo_T = df_dia[df_dia['Tipo_Sorteo'] == 'T']['Numero'].values
-        fijo_N = df_dia[df_dia['Tipo_Sorteo'] == 'N']['Numero'].values
         
-        if len(fijo_T) > 0 and len(fijo_N) > 0:
-            decena_T = int(fijo_T[0]) // 10
-            unidad_N = int(fijo_N[0]) % 10
+        fila_T = df_dia[df_dia['Tipo_Sorteo'] == 'T']
+        fila_N = df_dia[df_dia['Tipo_Sorteo'] == 'N']
+        
+        fijo_T_val = None
+        fijo_N_val = None
+        
+        if not fila_T.empty:
+            try:
+                fijo_T_val = int(float(fila_T['Fijo'].iloc[0]))
+            except: pass
+                
+        if not fila_N.empty:
+            try:
+                fijo_N_val = int(float(fila_N['Fijo'].iloc[0]))
+            except: pass
+        
+        if fijo_T_val is not None and fijo_N_val is not None:
+            decena_T = fijo_T_val // 10
+            unidad_N = fijo_N_val % 10
             if decena_T == unidad_N:
                 eventos['T->N'].append({'fecha': fecha, 'digito': decena_T})
         
-        if len(fijo_N) > 0 and i < len(fechas_unicas) - 1:
+        if fijo_N_val is not None and i < len(fechas_unicas) - 1:
             fecha_siguiente = fechas_unicas[i + 1]
             df_siguiente = df_filtrado[df_filtrado['Fecha'].dt.date == fecha_siguiente]
-            fijo_T_sig = df_siguiente[df_siguiente['Tipo_Sorteo'] == 'T']['Numero'].values
-            if len(fijo_T_sig) > 0:
-                decena_N = int(fijo_N[0]) // 10
-                unidad_T_sig = int(fijo_T_sig[0]) % 10
-                if decena_N == unidad_T_sig:
-                    eventos['N->T'].append({'fecha': fecha, 'digito': decena_N})
+            fila_T_sig = df_siguiente[df_siguiente['Tipo_Sorteo'] == 'T']
+            
+            if not fila_T_sig.empty:
+                try:
+                    fijo_T_sig_val = int(float(fila_T_sig['Fijo'].iloc[0]))
+                    decena_N = fijo_N_val // 10
+                    unidad_T_sig = fijo_T_sig_val % 10
+                    if decena_N == unidad_T_sig:
+                        eventos['N->T'].append({'fecha': fecha, 'digito': decena_N})
+                except: pass
     
     fecha_hoy_date = fecha_hoy.date()
     stats = []
@@ -828,10 +833,7 @@ def analizar_transferencia_flotodo(df_completo, dias_atras=180):
         if len(eventos_lista) >= 2:
             gaps = [(eventos_lista[j]['fecha'] - eventos_lista[j-1]['fecha']).days for j in range(1, len(eventos_lista))]
             promedio_historico = round(np.mean(gaps), 1) if gaps else 0
-            if len(gaps) >= 2:
-                secuencia_reciente = round(np.mean(gaps[-2:]), 1)
-            else:
-                secuencia_reciente = gaps[0] if gaps else promedio_historico
+            secuencia_reciente = round(np.mean(gaps[-2:]), 1) if len(gaps) >= 2 else (gaps[0] if gaps else promedio_historico)
             
             if secuencia_reciente < promedio_historico * 0.7:
                 tipo_secuencia = "ACELERADO"
@@ -912,43 +914,36 @@ def eliminar_ultimo_sorteo(ruta_csv):
 # --- MAIN ---
 df_fijos, df_completo = cargar_datos_flotodo(RUTA_CSV)
 
-# SIDEBAR - MOSTRAR ULTIMOS SORTEOS
+# SIDEBAR
 st.sidebar.header("📋 Últimos Sorteos")
 
-# Ultimo Fijo Tarde
 df_ultima_tarde = df_fijos[df_fijos['Tipo_Sorteo'] == 'T'].tail(1)
 if not df_ultima_tarde.empty:
     fecha_t = df_ultima_tarde['Fecha'].values[0]
     num_t = int(df_ultima_tarde['Numero'].values[0])
     st.sidebar.metric("🌞 Último Tarde", f"{num_t:02d}", delta=pd.Timestamp(fecha_t).strftime('%d/%m'))
-else:
-    st.sidebar.metric("🌞 Último Tarde", "Sin datos")
 
-# Ultimo Fijo Noche
 df_ultima_noche = df_fijos[df_fijos['Tipo_Sorteo'] == 'N'].tail(1)
 if not df_ultima_noche.empty:
     fecha_n = df_ultima_noche['Fecha'].values[0]
     num_n = int(df_ultima_noche['Numero'].values[0])
     st.sidebar.metric("🌙 Último Noche", f"{num_n:02d}", delta=pd.Timestamp(fecha_n).strftime('%d/%m'))
-else:
-    st.sidebar.metric("🌙 Último Noche", "Sin datos")
 
-# Sección para agregar sorteo
-with st.sidebar.expander("📝 Agregar Sorteo", expanded=False):
+with st.sidebar.expander("📝 Agregar Sorteo"):
     f = st.date_input("Fecha:", datetime.now().date(), format="DD/MM/YYYY", label_visibility="collapsed")
     s = st.radio("Sesión:", ["Tarde (T)", "Noche (N)"], horizontal=True, label_visibility="collapsed")
-    cent = st.number_input("Centena (0-9):", 0, 9, 0, key="centena_input")
+    cent = st.number_input("Centena (0-9):", 0, 9, 0)
     c1, c2 = st.columns(2)
-    with c1: fj = st.number_input("Fijo", 0, 99, 0, format="%02d", label_visibility="collapsed")
-    with c2: c1v = st.number_input("1er Corrido", 0, 99, 0, format="%02d", label_visibility="collapsed")
-    p2 = st.number_input("2do Corrido", 0, 99, 0, format="%02d", label_visibility="collapsed")
+    with c1: fj = st.number_input("Fijo", 0, 99, 0, format="%02d")
+    with c2: c1v = st.number_input("1er Corrido", 0, 99, 0, format="%02d")
+    p2 = st.number_input("2do Corrido", 0, 99, 0, format="%02d")
     
-    if st.button("💾 Guardar", type="primary", use_container_width=True):
+    if st.button("💾 Guardar", type="primary"):
         cd = s.split('(')[1].replace(')', '')
         try:
             with open(RUTA_CSV, 'r', encoding='utf-8-sig') as file:
                 primera = file.readline()
-            sep = ',' if ',' in primera and ';' not in primera else ';'
+            sep = ',' if ',' in primera and ';' not in первая else ';'
             with open(RUTA_CSV, 'a', encoding='utf-8-sig') as file:
                 file.write(f"{f.strftime('%d-%m-%Y')}{sep}{cd}{sep}{cent}{sep}{fj:02d}{sep}{c1v:02d}{sep}{p2:02d}\n")
             st.success("✅ Guardado")
@@ -958,23 +953,12 @@ with st.sidebar.expander("📝 Agregar Sorteo", expanded=False):
         except Exception as e:
             st.error(f"Error: {e}")
 
-# Sección para eliminar sorteo
-with st.sidebar.expander("🗑️ Eliminar Sorteo", expanded=False):
-    st.markdown("**Eliminar último registro:**")
-    try:
-        with open(RUTA_CSV, 'r', encoding='utf-8-sig') as file:
-            lineas = file.readlines()
-        if len(lineas) > 1:
-            ultimo = lineas[-1].strip()
-            st.text(f"Último: {ultimo}")
-    except: pass
-    
-    if st.button("❌ Eliminar Último", type="secondary", use_container_width=True):
+with st.sidebar.expander("🗑️ Eliminar Sorteo"):
+    if st.button("❌ Eliminar Último"):
         exito, mensaje = eliminar_ultimo_sorteo(RUTA_CSV)
         if exito:
             st.success(f"✅ Eliminado: {mensaje}")
             time.sleep(1)
-            st.cache_resource.clear()
             st.rerun()
         else:
             st.error(f"❌ {mensaje}")
@@ -989,22 +973,18 @@ modo = st.sidebar.radio("Filtro:", ["General", "Tarde", "Noche"])
 
 if modo == "Tarde":
     dfa = df_fijos[df_fijos['Tipo_Sorteo'] == 'T'].copy()
-    t = "Tarde"
 elif modo == "Noche":
     dfa = df_fijos[df_fijos['Tipo_Sorteo'] == 'N'].copy()
-    t = "Noche"
 else:
     dfa = df_fijos.copy()
-    t = "General"
 
 if dfa.empty:
-    st.warning(f"⚠️ No hay datos para: {t}")
+    st.warning(f"⚠️ No hay datos para: {modo}")
     st.stop()
 
-# Se inserta la nueva pestaña al inicio
 tabs = st.tabs(["🗓️ Faltantes del Mes", "🔄 Transferencia", "🔢 Dígito Faltante", "🔍 Patrones", "📅 Almanaque", "🧠 Propuesta", "🔗 Secuencia", "🧪 Laboratorio", "📉 Estabilidad"])
 
-# PESTAÑA 0: FALTANTES DEL MES (NUEVA)
+# PESTAÑA 0: FALTANTES DEL MES
 with tabs[0]:
     st.subheader("🗓️ Análisis de Faltantes del Mes")
     
@@ -1038,7 +1018,6 @@ with tabs[0]:
 
             st.markdown("---")
             st.markdown("#### 📊 Detalle de Faltantes")
-            # Renombramos columna dinámicamente
             df_show = df_faltantes_res.rename(columns={'Veces Salidas': f'Frec. ({cant_sorteos} sort.)'})
             st.dataframe(df_show, use_container_width=True, hide_index=True)
 
@@ -1047,7 +1026,6 @@ with tabs[0]:
             st.info("Ordenado del más reciente al más antiguo. Noche (N) tiene prioridad sobre Tarde (T) en el mismo día.")
             
             df_historial = df_fijos.tail(20).copy()
-            # Ordenamiento: Noche (N) -> 0, Tarde (T) -> 1
             orden_tipo = {'N': 0, 'T': 1, 'OTRO': 2}
             df_historial['orden_tipo'] = df_historial['Tipo_Sorteo'].map(orden_tipo)
             
@@ -1099,7 +1077,7 @@ with tabs[1]:
             if row['Alerta']:
                 st.success(f"✅ **{row['Transferencia']}** - ALERTA: Puede repetir")
                 st.markdown(f"📅 Último evento: {row['Ultima_Fecha']} (dígito {row['Ultimo_Digito']})")
-                st.markdown(f"📊 Sin evento hace: {row['Dias_Sin_Evento']} días | Predicción: cada {row['Prediccion_Dias']} días")
+                st.markdown(f"📊 Sin evento hace: {row['Dias_Sin_Evento']} дней | Predicción: cada {row['Prediccion_Dias']} días")
                 
                 if row['Transferencia'] == 'T->N':
                     ultimo_T = df_fijos[df_fijos['Tipo_Sorteo'] == 'T'].iloc[-1] if len(df_fijos[df_fijos['Tipo_Sorteo'] == 'T']) > 0 else None
@@ -1166,9 +1144,16 @@ with tabs[2]:
         dias_stats_dig = st.slider("Días de análisis:", 30, 365, 180, key="dig_stats_dias")
         tipo_stats = st.selectbox("Ver estadísticas de:", ['general', 'centena', 'fijo', 'corrido1', 'corrido2'], key="sel_tipo_stats")
         
-        stats = estadisticas_digitos_separadas(df_completo, dias_stats_dig)
+        # --- CORRECCIÓN: Filtrar por modo seleccionado ---
+        df_stats_input = df_completo.copy()
+        if modo == "Tarde":
+            df_stats_input = df_completo[df_completo['Tipo_Sorteo'] == 'T'].copy()
+        elif modo == "Noche":
+            df_stats_input = df_completo[df_completo['Tipo_Sorteo'] == 'N'].copy()
+            
+        stats = estadisticas_digitos_separadas(df_stats_input, dias_stats_dig)
         
-        st.markdown(f"### Estadísticas: {tipo_stats.upper()}")
+        st.markdown(f"### Estadísticas: {tipo_stats.upper()} (Modo: {modo})")
         st.dataframe(stats[tipo_stats], use_container_width=True, hide_index=True)
         
         st.markdown("### 📊 Resumen")
@@ -1202,7 +1187,7 @@ with tabs[2]:
 
 # PESTAÑA 3: PATRONES
 with tabs[3]:
-    st.subheader(f"🔍 Patrones: {t}")
+    st.subheader(f"🔍 Patrones")
     c1, c2 = st.columns(2)
     with c1: n = st.number_input("Disparador:", 0, 99, 40, format="%02d", key="patron_num")
     with c2: v = st.slider("Ventana:", 1, 30, 15, key="patron_ventana")
@@ -1315,7 +1300,7 @@ with tabs[4]:
 
 # PESTAÑA 5: PROPUESTA
 with tabs[5]:
-    st.subheader(f"🧠 Sincronización: {t}")
+    st.subheader(f"🧠 Sincronización")
     c1, c2 = st.columns(2)
     with c1: dt = st.number_input("Días Tendencia:", 5, 60, 15, key="prop_dias")
     with c2: dg = st.number_input("Gap Mínimo:", 1, 90, 10, key="prop_gap")
@@ -1332,7 +1317,7 @@ with tabs[5]:
 
 # PESTAÑA 6: SECUENCIA
 with tabs[6]:
-    st.subheader(f"🔗 Secuencia: {t}")
+    st.subheader(f"🔗 Secuencia")
     c1, c2, c3 = st.columns(3)
     with c1: parte = st.selectbox("Parte del número", ["Decena", "Unidad"])
     with c2: tipo = st.selectbox("Tipo de patrón", ["digito", "paridad", "altura"])
@@ -1365,6 +1350,7 @@ with tabs[7]:
     
     col_l1, col_l2, col_l3 = st.columns(3)
     with col_l1:
+        # CORRECCIÓN: Usar nombre_mes_sel consistentemente
         nombre_mes_sel = st.selectbox("Mes:", list(meses_lab.values()), index=list(meses_lab.keys()).index(mes_default_lab), key="lab_mes")
         mes_sel_num = [k for k, v in meses_lab.items() if v == nombre_mes_sel][0]
     with col_l2:
@@ -1450,4 +1436,4 @@ with tabs[8]:
                 st.info("💡 **Estados:** 🔥 EN RACHA | ✅ NORMAL | ⏳ VENCIDO | 🔴 MUY VENCIDO")
 
 st.markdown("---")
-st.caption("Flotodo Suite Ultimate v2.0 | Análisis de lotería")
+st.caption("Flotodo Suite Ultimate v2.1 | 🦩 Análisis de lotería")
