@@ -6,3 +6,6 @@ seaborn==0.13.2
 gspread
 oauth2client
 python-dateutil
+gspread
+oauth2client
+google-auth
