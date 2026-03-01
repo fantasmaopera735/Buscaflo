@@ -498,7 +498,8 @@ def analizar_almanaque(df_fijos, dia_inicio, dia_fin, meses_atras, strict_mode=T
             p = perfil_val.values[0] if not perfil_val.empty else "Desconocido"
             pers_num.append({'Número': f"{n:02d}", 'Perfil': p})
     df_pers_num = pd.DataFrame(pers_num).sort_values('Número').reset_index(drop=True) if pers_num else pd.DataFrame(columns=['Número', 'Perfil'])
-df_pers_num = pd.DataFrame(pers_num).sort_values('Número').reset_index(drop=True) if pers_num else pd.DataFrame(columns=['Número', 'Perfil'])
+
+    df_pers_num = pd.DataFrame(pers_num).sort_values('Número').reset_index(drop=True) if pers_num else pd.DataFrame(columns=['Número', 'Perfil'])
 
     sets_perfiles = []
     for df_b in bloques_validos:
@@ -998,7 +999,9 @@ if st.sidebar.button("Cerrar Sesión"):
 if st.session_state.get('rol') == 'admin':
     with st.sidebar.expander("🔧 Administrador"):
         tab_admin1, tab_admin2 = st.tabs(["Cambiar Clave", "Crear Usuario"])
-# Tab 1: Cambiar Clave
+        
+        
+        # Tab 1: Cambiar Clave
         with tab_admin1:
             npass = st.text_input("Nueva Clave", type="password")
             if st.button("Actualizar Clave"):
