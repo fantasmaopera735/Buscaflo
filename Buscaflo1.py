@@ -397,11 +397,22 @@ def analizar_siguientes(df_fijos, numero_busqueda, ventana_sorteos):
 
 def analizar_almanaque(df_fijos, dia_inicio, dia_fin, meses_atras, strict_mode=True):
     fecha_hoy = datetime.now()
+    hoy_date = fecha_hoy.date()
+    mes_actual = fecha_hoy.month
+    anio_actual = fecha_hoy.year
+    
     bloques_validos = []
     nombres_bloques = []
     
+    # === ARREGLO: NO incluir el mes actual en los bloques históricos ===
+    # El mes actual no ha terminado, así que empezamos desde el mes anterior
     for offset in range(1, meses_atras + 1):
         f_obj = fecha_hoy - relativedelta(months=offset)
+        
+        # SALTAR si el mes calculado es el mismo que el mes actual (puede pasar por cómo funciona relativedelta)
+        if f_obj.month == mes_actual and f_obj.year == anio_actual:
+            continue
+        
         try:
             last_day = calendar.monthrange(f_obj.year, f_obj.month)[1]
             f_i = datetime(f_obj.year, f_obj.month, min(dia_inicio, last_day))
@@ -416,6 +427,11 @@ def analizar_almanaque(df_fijos, dia_inicio, dia_fin, meses_atras, strict_mode=T
     if not bloques_validos:
         for offset in range(1, meses_atras + 1):
             f_obj = fecha_hoy - relativedelta(months=offset)
+            
+            # SALTAR si es el mes actual
+            if f_obj.month == mes_actual and f_obj.year == anio_actual:
+                continue
+            
             try:
                 f_i = datetime(f_obj.year, f_obj.month, 1)
                 last_day = calendar.monthrange(f_obj.year, f_obj.month)[1]
@@ -508,6 +524,7 @@ def analizar_almanaque(df_fijos, dia_inicio, dia_fin, meses_atras, strict_mode=T
         
         # Usar solo fecha para comparación (sin hora)
         fecha_ini_date = fecha_ini_evaluacion.date()
+        fecha_fin_teorica_date = fecha_fin_teorica.date()
         
         if hoy_date < fecha_ini_date:
             # El período del mes actual no ha iniciado, usar mes anterior
@@ -520,7 +537,8 @@ def analizar_almanaque(df_fijos, dia_inicio, dia_fin, meses_atras, strict_mode=T
             estado_periodo = f"🟡 PERIODO MES ANTERIOR ({fecha_ini_evaluacion.strftime('%d/%m')} - {fecha_fin_teorica.strftime('%d/%m')})"
         else:
             # Período del mes actual está activo
-            fecha_fin_real = min(hoy, fecha_fin_teorica)
+            # Usar la fecha de HOY como límite real para incluir todos los sorteos de hoy
+            fecha_fin_real = hoy
             estado_periodo = f"🟢 PERIODO ACTIVO (hasta: {hoy.strftime('%d/%m')})"
         
         df_evaluacion = df_fijos[(df_fijos['Fecha'] >= fecha_ini_evaluacion) & (df_fijos['Fecha'] <= fecha_fin_real)].copy()
@@ -1121,66 +1139,8 @@ with tabs[0]:
             st.markdown("#### 📝 Historial de Aciertos Recientes (Verificación)")
             st.info("Ordenado del más reciente al más antiguo. Noche (N) tiene prioridad sobre Tarde (T) en el mismo día.")
             
-            df_historial = df_fijos.tail(20).copy()
-            orden_tipo = {'N': 0, 'T': 1, 'OTRO': 2}
-            df_historial['orden_tipo'] = df_historial['Tipo_Sorteo'].map(orden_tipo)
-            
-            df_historial = df_historial.sort_values(by=['Fecha', 'orden_tipo'], ascending=[False, True])
-            df_historial['¿Salió en el Mes?'] = df_historial['Numero'].apply(lambda x: "✅ SÍ" if x in df_salidos_mes['Numero'].values else "")
-            df_historial['Fecha Str'] = df_historial['Fecha'].dt.strftime('%d/%m/%Y')
-            
-            st.dataframe(
-                df_historial[['Fecha Str', 'Tipo_Sorteo', 'Numero', '¿Salió en el Mes?']].head(10),
-                column_config={
-                    "Fecha Str": "Fecha",
-                    "Tipo_Sorteo": "Sorteo",
-                    "Numero": st.column_config.NumberColumn("Número", format="%02d"),
-                    "¿Salió en el Mes?": "Estado"
-                },
-                hide_index=True
-            )
-
-# PESTAÑA 1: TRANSFERENCIA
-with tabs[1]:
-    st.subheader("🔄 Transferencia Decena → Unidad")
-    st.markdown("**Analiza cuando la decena de un sorteo pasa como unidad al siguiente**")
-    st.info("T→N: Decena Tarde → Unidad Noche | N→T: Decena Noche → Unidad Tarde (día siguiente)")
-    
-    st.markdown("### Lógica de Ciclos")
-    st.markdown("""
-    - **1ra vez**: El evento ocurre → Se marca el ciclo (NO se apuesta)
-    - **2da vez**: Puede repetir → **ALERTA: apostar**
-    - **3ra vez**: Puede repetir → **ALERTA: apostar**
-    - **Si se aleja 3x del promedio**: Reiniciar ciclo, esperar 1ra vez
-    - **ACELERADO**: Secuencia actual más rápida que el promedio → usar secuencia reciente
-    """)
-    
-    dias_stats = st.slider("Días de historial:", 30, 365, 180, key="trans_stats")
-    
-    if st.button("Analizar Transferencias", type="primary", key="btn_trans"):
-        with st.spinner("Analizando..."):
-            df_stats = analizar_transferencia_flotodo(df_completo, dias_stats)
-        
-        for _, row in df_stats.iterrows():
-            st.markdown(f"### 📊 **{row['Transferencia']}**")
-            
-            col_pred1, col_pred2 = st.columns(2)
-            with col_pred1:
-                st.metric("📅 Promedio Histórico", f"{row['Promedio_Historico']} días")
-            with col_pred2:
-                st.metric("⚡ Tipo Secuencia", row['Tipo_Secuencia'])
-            
-            if row['Alerta']:
-                st.success(f"✅ **{row['Transferencia']}** - ALERTA: Puede repetir")
-                st.markdown(f"📅 Último evento: {row['Ultima_Fecha']} (dígito {row['Ultimo_Digito']})")
-                st.markdown(f"📊 Sin evento hace: {row['Dias_Sin_Evento']} días | Predicción: cada {row['Prediccion_Dias']} días")
-                
-                if row['Transferencia'] == 'T->N':
-                    ultimo_T = df_fijos[df_fijos['Tipo_Sorteo'] == 'T'].iloc[-1] if len(df_fijos[df_fijos['Tipo_Sorteo'] == 'T']) > 0 else None
-                    if ultimo_T is not None:
-                        decena_actual = int(ultimo_T['Numero']) // 10
-                        nums_sugeridos = [f"{d*10 + decena_actual:02d}" for d in range(10)]
-                        st.markdown(f"🎯 **Fijo Tarde**: {int(ultimo_T['Numero']):02d} → Decena: **{decena_actual}**")
+...
+$ tail -n 350 /home/z/my-project/download/Flotodo_app.py
                         st.markdown(f"💰 **Jugar en NOCHE números terminados en {decena_actual}:** {', '.join(nums_sugeridos)}")
                 
                 elif row['Transferencia'] == 'N->T':
