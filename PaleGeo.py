@@ -24,7 +24,6 @@ COL_FIJO = 'Fijo'
 COL_CORR1 = 'Primer_Corrido'
 COL_CORR2 = 'Segundo_Corrido'
 
-# MAPEO para 3 sesiones
 MAPEO = {
     't': 'Tarde', 'tarde': 'Tarde',
     'n': 'Noche', 'noche': 'Noche',
@@ -118,6 +117,53 @@ def detectar_pales(fila):
                 pass
     return {g: nums for g, nums in grupos.items() if len(nums) >= 2}
 
+def calcular_estadisticas_grupo(pales_grupo, fecha_max):
+    """Calcula estadísticas detalladas para un grupo"""
+    if not pales_grupo:
+        return {
+            'frecuencia': 0,
+            'promedio_dias': 0,
+            'ausencia_maxima': 0,
+            'dias_sin_aparecer': 0,
+            'ultima_fecha': None,
+            'gaps': []
+        }
+    
+    # Ordenar por fecha
+    fechas = sorted([p['fecha'] for p in pales_grupo if pd.notna(p['fecha'])])
+    
+    if not fechas:
+        return {
+            'frecuencia': len(pales_grupo),
+            'promedio_dias': 0,
+            'ausencia_maxima': 0,
+            'dias_sin_aparecer': 0,
+            'ultima_fecha': None,
+            'gaps': []
+        }
+    
+    # Calcular gaps (días entre apariciones)
+    gaps = []
+    for i in range(1, len(fechas)):
+        gap = (fechas[i] - fechas[i-1]).days
+        if gap > 0:
+            gaps.append(gap)
+    
+    frecuencia = len(fechas)
+    promedio_dias = round(np.mean(gaps), 1) if gaps else 0
+    ausencia_maxima = max(gaps) if gaps else 0
+    ultima_fecha = fechas[-1]
+    dias_sin_aparecer = (fecha_max - ultima_fecha).days if ultima_fecha and pd.notna(fecha_max) else 0
+    
+    return {
+        'frecuencia': frecuencia,
+        'promedio_dias': promedio_dias,
+        'ausencia_maxima': ausencia_maxima,
+        'dias_sin_aparecer': dias_sin_aparecer,
+        'ultima_fecha': ultima_fecha,
+        'gaps': gaps
+    }
+
 def analizar_combinaciones(todos_pales, grupo_seleccionado):
     """Analiza combinaciones dentro de un grupo"""
     comb_count = defaultdict(lambda: {'count': 0, 'fechas': []})
@@ -152,6 +198,7 @@ def main():
     
     df['Fecha_Parsed'] = df[COL_FECHA].apply(parsear_fecha)
     df['Sesion'] = df[COL_SESION].apply(normalizar_sesion)
+    fecha_max = df['Fecha_Parsed'].max()
     
     todos_pales = []
     for idx, fila in df.iterrows():
@@ -164,28 +211,62 @@ def main():
                 'numeros': nums
             })
     
-    # 4 PESTAÑAS
+    # Calcular estadísticas por grupo
+    stats_por_grupo = {}
+    for grupo in GRUPOS.keys():
+        pales_g = [p for p in todos_pales if p['grupo'] == grupo]
+        stats_por_grupo[grupo] = calcular_estadisticas_grupo(pales_g, fecha_max)
+    
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Resumen", "🎯 Combinaciones", "📜 Historial", "ℹ️ Grupos"])
     
-    # === TAB 1: RESUMEN ===
+    # === TAB 1: RESUMEN CON ESTADÍSTICAS ===
     with tab1:
+        st.header("📊 Estadísticas por Grupo")
+        st.markdown("*Un pale ocurre cuando 2+ números del mismo grupo aparecen en un mismo sorteo*")
+        
+        # Tabla resumen
+        resumen_data = []
+        for grupo in ['CERRADOS', 'ABIERTOS', 'RECTOS']:
+            s = stats_por_grupo[grupo]
+            ultima = s['ultima_fecha'].strftime('%d/%m/%Y') if s['ultima_fecha'] else '-'
+            resumen_data.append({
+                'Grupo': grupo,
+                'Dígitos': INFO[grupo]['digitos'],
+                'Frecuencia': s['frecuencia'],
+                'Promedio Días': s['promedio_dias'],
+                'Ausencia Máx': s['ausencia_maxima'],
+                'Días Sin Aparecer': s['dias_sin_aparecer'],
+                'Última Fecha': ultima
+            })
+        
+        df_resumen = pd.DataFrame(resumen_data)
+        st.dataframe(df_resumen, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        
+        # Detalle por grupo
         for grupo in GRUPOS.keys():
             pales_g = [p for p in todos_pales if p['grupo'] == grupo]
-            st.markdown(f"### {grupo}")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Pales", len(pales_g))
-            with col2:
-                st.metric("Dígitos", INFO[grupo]['digitos'])
-            with col3:
-                st.metric("Números", INFO[grupo]['cant'])
+            s = stats_por_grupo[grupo]
             
-            if pales_g:
-                with st.expander(f"Ver últimos 10 pales de {grupo}"):
+            with st.expander(f"{'🔒' if grupo == 'CERRADOS' else '🔓' if grupo == 'ABIERTOS' else '📏'} {grupo} - Ver detalle"):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Pales encontrados", s['frecuencia'])
+                    st.metric("Promedio entre salidas", f"{s['promedio_dias']} días")
+                with col2:
+                    st.metric("Ausencia máxima", f"{s['ausencia_maxima']} días")
+                    st.metric("Días sin aparecer", s['dias_sin_aparecer'])
+                with col3:
+                    if s['gaps']:
+                        st.metric("Gap mínimo", f"{min(s['gaps'])} días")
+                        st.metric("Gap máximo", f"{max(s['gaps'])} días")
+                
+                if pales_g:
+                    st.markdown("**Últimos 10 pales:**")
                     for p in pales_g[-10:][::-1]:
                         fecha = p['fecha'].strftime('%d/%m/%Y') if pd.notna(p['fecha']) else '-'
                         st.write(f"• {fecha} ({p['sesion']}): {', '.join(p['numeros'])}")
-            st.markdown("---")
     
     # === TAB 2: COMBINACIONES ===
     with tab2:
