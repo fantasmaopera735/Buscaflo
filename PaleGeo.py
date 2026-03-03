@@ -13,16 +13,14 @@ from collections import defaultdict
 import os
 
 # =============================================================================
-# CONFIGURACIÓN DE PÁGINA (solo cuando se ejecuta directamente)
+# CONFIGURACIÓN DE PÁGINA
 # =============================================================================
-import sys
-if __name__ == "__main__":
-    st.set_page_config(
-        page_title="PaleGeo - Análisis de Pales",
-        page_icon="🎯",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
+st.set_page_config(
+    page_title="PaleGeo - Análisis de Pales",
+    page_icon="🎯",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # =============================================================================
 # CONSTANTES - GRUPOS DE DÍGITOS
@@ -421,24 +419,12 @@ def detectar_columnas(df):
 # =============================================================================
 @st.cache_resource
 def conectar_google_sheets():
-    """Conecta a Google Sheets usando credenciales (local o Streamlit Cloud)"""
+    """Conecta a Google Sheets usando credenciales"""
     try:
         import gspread
         from google.oauth2.service_account import Credentials
         
-        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-        
-        # Opción 1: Intentar leer desde st.secrets (Streamlit Cloud)
-        try:
-            if 'gcp_service_account' in st.secrets:
-                creds_dict = dict(st.secrets['gcp_service_account'])
-                credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-                gc = gspread.authorize(credentials)
-                return gc, None
-        except Exception:
-            pass
-        
-        # Opción 2: Buscar archivo de credenciales (local)
+        # Buscar archivo de credenciales - AMBOS NOMBRES
         creds_path = None
         for nombre in ['credentials.json', 'credenciales.json']:
             if os.path.exists(nombre):
@@ -448,6 +434,7 @@ def conectar_google_sheets():
         if not creds_path:
             return None, "No se encontró 'credentials.json' ni 'credenciales.json'"
         
+        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
         credentials = Credentials.from_service_account_file(creds_path, scopes=scopes)
         gc = gspread.authorize(credentials)
         
@@ -455,11 +442,10 @@ def conectar_google_sheets():
     except Exception as e:
         return None, str(e)
 
-@st.cache_data(ttl=300)
-def cargar_datos_google_sheets(gc, sheet_id, hoja_nombre="Geotodo"):
+def cargar_datos_google_sheets(_gc, sheet_id, hoja_nombre="Geotodo"):
     """Carga datos desde Google Sheets"""
     try:
-        sh = gc.open_by_key(sheet_id)
+        sh = _gc.open_by_key(sheet_id)
         worksheet = sh.worksheet(hoja_nombre)
         datos = worksheet.get_all_records()
         df = pd.DataFrame(datos)
