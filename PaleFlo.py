@@ -74,15 +74,25 @@ INFO_GRUPOS = {
 
 @st.cache_resource
 def conectar_google_sheets():
-    """Conecta con Google Sheets"""
+    """Conecta con Google Sheets (local o Streamlit Cloud)"""
     try:
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         
-        # Buscar archivo de credenciales en múltiples ubicaciones
+        # Opción 1: Intentar leer desde st.secrets (Streamlit Cloud)
+        try:
+            if 'gcp_service_account' in st.secrets:
+                from google.oauth2.service_account import Credentials as GoogleCredentials
+                creds_dict = dict(st.secrets['gcp_service_account'])
+                credentials = GoogleCredentials.from_service_account_info(creds_dict, scopes=scope)
+                client = gspread.authorize(credentials)
+                return client
+        except Exception:
+            pass
+        
+        # Opción 2: Buscar archivo de credenciales (local)
         import os
         creds_path = None
         
-        # Lista de posibles ubicaciones y nombres
         posibles_rutas = [
             'credentials.json',
             'credenciales.json',
