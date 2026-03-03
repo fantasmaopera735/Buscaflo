@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 PaleGeo - Análisis de Pales por Grupos
-Hoja: Geotodo (3 sesiones)
+Hoja: Geotodo (M=Mañana, T=Tarde, N=Noche)
 """
 
 import streamlit as st
@@ -9,143 +9,150 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from collections import defaultdict
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 import os
 
 if __name__ == "__main__":
     st.set_page_config(page_title="PaleGeo", page_icon="🎯", layout="wide")
 
-GRUPOS = {
-    'CERRADOS': ['0', '6', '8', '9'],
-    'ABIERTOS': ['2', '3', '5'],
-    'RECTOS': ['1', '4', '7']
+GS_ID = '1ID79C3pz3w5L2oA6krl9LjYEZstPgCGLoqw3FQ1qXDw'
+GS_SHEET = 'Geotodo'
+COL_FECHA = 'Fecha'
+COL_SESION = 'Tipo_Sorteo'
+COL_FIJO = 'Fijo'
+COL_CORR1 = 'Primer_Corrido'
+COL_CORR2 = 'Segundo_Corrido'
+
+# MAPEO para 3 sesiones
+MAPEO = {
+    't': 'Tarde', 'tarde': 'Tarde',
+    'n': 'Noche', 'noche': 'Noche',
+    'm': 'Mañana', 'mañana': 'Mañana', 'manana': 'Mañana'
 }
 
-GOOGLE_SHEETS_ID = "1ID79C3pz3w5L2oA6krl9LjYEZstPgCGLoqw3FQ1qXDw"
+GRUPOS = {
+    'CERRADOS': {'digitos': {0, 6, 8, 9}, 'numeros': []},
+    'ABIERTOS': {'digitos': {2, 3, 5}, 'numeros': []},
+    'RECTOS': {'digitos': {1, 4, 7}, 'numeros': []}
+}
 
-def clasificar_numero(numero):
-    if pd.isna(numero):
-        return None
-    try:
-        num_str = str(int(float(numero))).zfill(2)
-    except:
-        return None
-    if len(num_str) < 2:
-        return None
-    d1, d2 = num_str[0], num_str[1]
-    for grupo, digitos in GRUPOS.items():
-        if d1 in digitos and d2 in digitos:
-            return grupo
-    return None
+for i in range(100):
+    s = f"{i:02d}"
+    d1, d2 = int(s[0]), int(s[1])
+    for g, d in GRUPOS.items():
+        if d1 in d['digitos'] and d2 in d['digitos']:
+            d['numeros'].append(i)
 
-def detectar_pales(fila, col_fijo, col_corr1, col_corr2):
-    pales = []
-    numeros = [('Fijo', fila.get(col_fijo)), ('Corr1', fila.get(col_corr1)), ('Corr2', fila.get(col_corr2))]
-    por_grupo = defaultdict(list)
-    for pos, num in numeros:
-        if pd.notna(num):
-            grupo = clasificar_numero(num)
-            if grupo:
-                por_grupo[grupo].append(str(int(float(num))).zfill(2))
-    for grupo, nums in por_grupo.items():
-        if len(nums) >= 2:
-            pales.append({'grupo': grupo, 'numeros': nums})
-    return pales
+INFO = {g: {'digitos': ','.join(map(str, d['digitos'])), 'cant': len(d['numeros'])} for g, d in GRUPOS.items()}
 
 @st.cache_resource
-def conectar_google_sheets():
+def conectar():
     try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         
-        # Streamlit Cloud - leer secrets
-        if 'gcp_service_account' in st.secrets:
-            creds_dict = {
-                "type": st.secrets["gcp_service_account"]["type"],
-                "project_id": st.secrets["gcp_service_account"]["project_id"],
-                "private_key_id": st.secrets["gcp_service_account"]["private_key_id"],
-                "private_key": st.secrets["gcp_service_account"]["private_key"],
-                "client_email": st.secrets["gcp_service_account"]["client_email"],
-                "client_id": st.secrets["gcp_service_account"]["client_id"],
-                "auth_uri": st.secrets["gcp_service_account"]["auth_uri"],
-                "token_uri": st.secrets["gcp_service_account"]["token_uri"],
-                "auth_provider_x509_cert_url": st.secrets["gcp_service_account"]["auth_provider_x509_cert_url"],
-                "client_x509_cert_url": st.secrets["gcp_service_account"]["client_x509_cert_url"],
-                "universe_domain": st.secrets["gcp_service_account"].get("universe_domain", "googleapis.com")
-            }
-            credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-            gc = gspread.authorize(credentials)
-            return gc, None
+        try:
+            if 'gcp_service_account' in st.secrets:
+                from google.oauth2.service_account import Credentials
+                creds_dict = dict(st.secrets['gcp_service_account'])
+                creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+                return gspread.authorize(creds)
+        except:
+            pass
         
-        # Local - archivo JSON
-        creds_path = None
-        for nombre in ['credentials.json', 'credenciales.json']:
-            if os.path.exists(nombre):
-                creds_path = nombre
-                break
-        if creds_path:
-            credentials = Credentials.from_service_account_file(creds_path, scopes=scopes)
-            gc = gspread.authorize(credentials)
-            return gc, None
-            
-        return None, "No hay credenciales configuradas"
+        for f in ['credentials.json', 'credenciales.json']:
+            if os.path.exists(f):
+                creds = ServiceAccountCredentials.from_json_keyfile_name(f, scope)
+                return gspread.authorize(creds)
+        return None
     except Exception as e:
-        return None, f"Error: {str(e)}"
+        st.error(f"Error: {e}")
+        return None
 
-def cargar_datos_google_sheets(gc, sheet_id, hoja_nombre="Geotodo"):
+# SIN DECORADOR
+def cargar_datos(gc, archivo_id, nombre_hoja):
+    if gc:
+        try:
+            spreadsheet = gc.open_by_key(archivo_id)
+            worksheet = spreadsheet.worksheet(nombre_hoja)
+            return pd.DataFrame(worksheet.get_all_records())
+        except Exception as e:
+            st.error(f"Error: {e}")
+    return None
+
+def parsear_fecha(f):
+    if pd.isna(f):
+        return None
+    for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d']:
+        try:
+            return datetime.strptime(str(f).strip(), fmt)
+        except:
+            continue
+    return None
+
+def normalizar_sesion(s):
+    if pd.isna(s):
+        return None
+    return MAPEO.get(str(s).strip().lower(), s)
+
+def clasificar(n):
     try:
-        sh = gc.open_by_key(sheet_id)
-        worksheet = sh.worksheet(hoja_nombre)
-        datos = worksheet.get_all_records()
-        df = pd.DataFrame(datos)
-        return df, None
-    except Exception as e:
-        return None, str(e)
+        s = f"{int(n):02d}"
+        d1, d2 = int(s[0]), int(s[1])
+        for g, d in GRUPOS.items():
+            if d1 in d['digitos'] and d2 in d['digitos']:
+                return g
+        return None
+    except:
+        return None
+
+def detectar_pales(fila):
+    grupos = defaultdict(list)
+    for col in [COL_FIJO, COL_CORR1, COL_CORR2]:
+        if col in fila.index and pd.notna(fila[col]):
+            try:
+                n = int(fila[col])
+                g = clasificar(n)
+                if g:
+                    grupos[g].append(f"{n:02d}")
+            except:
+                pass
+    return {g: nums for g, nums in grupos.items() if len(nums) >= 2}
 
 def main():
     st.title("🎯 PaleGeo - Pales por Grupos")
-    st.markdown("**Hoja: Geotodo** | Sesiones: Mañana, Tarde, Noche")
+    st.markdown("**Hoja: Geotodo** | Sesiones: Mañana, Tarde y Noche")
     
-    with st.expander("📋 Ver Grupos"):
-        for grupo, digitos in GRUPOS.items():
-            st.markdown(f"**{grupo}**: Dígitos {', '.join(digitos)}")
+    # Info grupos
+    with st.expander("📋 Grupos"):
+        for g, i in INFO.items():
+            st.write(f"**{g}**: Dígitos {i['digitos']} ({i['cant']} números)")
     
-    gc, error = conectar_google_sheets()
-    if error:
-        st.error(f"Error: {error}")
+    gc = conectar()
+    if not gc:
+        st.error("Sin conexión")
         return
     
-    with st.spinner("Cargando..."):
-        df, error = cargar_datos_google_sheets(gc, GOOGLE_SHEETS_ID, "Geotodo")
-    
-    if error:
-        st.error(f"Error: {error}")
-        return
-    
-    df = df.dropna(how='all')
-    df.columns = [str(c).strip() for c in df.columns]
-    
-    cols_lower = {str(c).strip().lower(): c for c in df.columns}
-    
-    col_fecha = cols_lower.get('fecha')
-    col_sesion = cols_lower.get('tipo_sorteo')
-    col_fijo = cols_lower.get('fijo')
-    col_corr1 = next((c for k, c in cols_lower.items() if 'primer' in k), None)
-    col_corr2 = next((c for k, c in cols_lower.items() if 'segundo' in k), None)
-    
-    if not all([col_fecha, col_fijo]):
-        st.error("Faltan columnas requeridas")
+    df = cargar_datos(gc, GS_ID, GS_SHEET)
+    if df is None or len(df) == 0:
+        st.error("Sin datos")
         return
     
     st.success(f"✅ {len(df)} registros")
     
+    df['Fecha_Parsed'] = df[COL_FECHA].apply(parsear_fecha)
+    df['Sesion'] = df[COL_SESION].apply(normalizar_sesion)
+    
     todos_pales = []
     for idx, fila in df.iterrows():
-        pales = detectar_pales(fila, col_fijo, col_corr1, col_corr2)
-        for p in pales:
-            p['fecha'] = fila.get(col_fecha, '')
-            p['sesion'] = fila.get(col_sesion, '')
-        todos_pales.extend(pales)
+        pales = detectar_pales(fila)
+        for g, nums in pales.items():
+            todos_pales.append({
+                'fecha': fila['Fecha_Parsed'],
+                'sesion': fila['Sesion'],
+                'grupo': g,
+                'numeros': nums
+            })
     
     tab1, tab2 = st.tabs(["📊 Resumen", "📜 Historial"])
     
@@ -153,15 +160,20 @@ def main():
         for grupo in GRUPOS.keys():
             pales_g = [p for p in todos_pales if p['grupo'] == grupo]
             st.markdown(f"### {grupo}")
-            st.metric("Pales encontrados", len(pales_g))
+            st.metric("Pales", len(pales_g))
             if pales_g:
-                with st.expander(f"Ver últimos 10"):
-                    for p in pales_g[-10:][::-1]:
-                        st.write(f"• {p['fecha']} ({p['sesion']}): {', '.join(p['numeros'])}")
+                with st.expander("Ver últimos"):
+                    for p in pales_g[-5:][::-1]:
+                        fecha = p['fecha'].strftime('%d/%m/%Y') if pd.notna(p['fecha']) else '-'
+                        st.write(f"• {fecha} ({p['sesion']}): {', '.join(p['numeros'])}")
     
     with tab2:
-        for p in todos_pales[-30:][::-1]:
-            st.markdown(f"**{p['fecha']}** ({p['sesion']}) - {p['grupo']}: {', '.join(p['numeros'])}")
+        # Orden: Noche → Tarde → Mañana dentro de cada día
+        orden = {'Noche': 1, 'Tarde': 2, 'Mañana': 3}
+        pales_ord = sorted(todos_pales, key=lambda x: (x['fecha'], orden.get(x['sesion'], 99)), reverse=True)
+        for p in pales_ord[:30]:
+            fecha = p['fecha'].strftime('%d/%m/%Y') if pd.notna(p['fecha']) else '-'
+            st.markdown(f"**{fecha}** ({p['sesion']}) - {p['grupo']}: {', '.join(p['numeros'])}")
 
 if __name__ == "__main__":
     main()
