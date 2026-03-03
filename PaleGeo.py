@@ -69,7 +69,6 @@ def conectar():
         st.error(f"Error: {e}")
         return None
 
-# SIN DECORADOR
 def cargar_datos(gc, archivo_id, nombre_hoja):
     if gc:
         try:
@@ -119,14 +118,25 @@ def detectar_pales(fila):
                 pass
     return {g: nums for g, nums in grupos.items() if len(nums) >= 2}
 
+def analizar_combinaciones(todos_pales, grupo_seleccionado):
+    """Analiza combinaciones dentro de un grupo"""
+    comb_count = defaultdict(lambda: {'count': 0, 'fechas': []})
+    
+    for p in todos_pales:
+        if p['grupo'] == grupo_seleccionado:
+            nums = sorted([int(n) for n in p['numeros']])
+            for i in range(len(nums)):
+                for j in range(i+1, len(nums)):
+                    comb = f"{nums[i]:02d}-{nums[j]:02d}"
+                    comb_count[comb]['count'] += 1
+                    fecha = p['fecha'].strftime('%d/%m/%Y') if pd.notna(p['fecha']) else '-'
+                    comb_count[comb]['fechas'].append(fecha)
+    
+    return comb_count
+
 def main():
     st.title("🎯 PaleGeo - Pales por Grupos")
     st.markdown("**Hoja: Geotodo** | Sesiones: Mañana, Tarde y Noche")
-    
-    # Info grupos
-    with st.expander("📋 Grupos"):
-        for g, i in INFO.items():
-            st.write(f"**{g}**: Dígitos {i['digitos']} ({i['cant']} números)")
     
     gc = conectar()
     if not gc:
@@ -154,26 +164,85 @@ def main():
                 'numeros': nums
             })
     
-    tab1, tab2 = st.tabs(["📊 Resumen", "📜 Historial"])
+    # 4 PESTAÑAS
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Resumen", "🎯 Combinaciones", "📜 Historial", "ℹ️ Grupos"])
     
+    # === TAB 1: RESUMEN ===
     with tab1:
         for grupo in GRUPOS.keys():
             pales_g = [p for p in todos_pales if p['grupo'] == grupo]
             st.markdown(f"### {grupo}")
-            st.metric("Pales", len(pales_g))
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Pales", len(pales_g))
+            with col2:
+                st.metric("Dígitos", INFO[grupo]['digitos'])
+            with col3:
+                st.metric("Números", INFO[grupo]['cant'])
+            
             if pales_g:
-                with st.expander("Ver últimos"):
-                    for p in pales_g[-5:][::-1]:
+                with st.expander(f"Ver últimos 10 pales de {grupo}"):
+                    for p in pales_g[-10:][::-1]:
                         fecha = p['fecha'].strftime('%d/%m/%Y') if pd.notna(p['fecha']) else '-'
                         st.write(f"• {fecha} ({p['sesion']}): {', '.join(p['numeros'])}")
+            st.markdown("---")
     
+    # === TAB 2: COMBINACIONES ===
     with tab2:
-        # Orden: Noche → Tarde → Mañana dentro de cada día
+        st.header("🎯 Análisis de Combinaciones")
+        st.markdown("Combinaciones de números dentro de cada grupo que forman pales.")
+        
+        grupo_sel = st.selectbox("Selecciona grupo:", list(GRUPOS.keys()), key="grupo_comb")
+        
+        comb_data = analizar_combinaciones(todos_pales, grupo_sel)
+        
+        if comb_data:
+            df_comb = pd.DataFrame([
+                {'Combinación': c, 'Frecuencia': d['count'], 'Últimas fechas': ', '.join(d['fechas'][-3:])}
+                for c, d in sorted(comb_data.items(), key=lambda x: x[1]['count'], reverse=True)
+            ])
+            st.dataframe(df_comb, use_container_width=True, hide_index=True)
+        else:
+            st.info(f"No hay combinaciones para {grupo_sel}")
+    
+    # === TAB 3: HISTORIAL ===
+    with tab3:
+        st.header("📜 Historial de Pales")
+        st.markdown("Orden: Noche → Tarde → Mañana dentro de cada día")
+        
+        grupo_filtro = st.selectbox("Filtrar por grupo:", ['Todos'] + list(GRUPOS.keys()), key="filtro_hist")
+        
         orden = {'Noche': 1, 'Tarde': 2, 'Mañana': 3}
-        pales_ord = sorted(todos_pales, key=lambda x: (x['fecha'], orden.get(x['sesion'], 99)), reverse=True)
-        for p in pales_ord[:30]:
+        
+        if grupo_filtro == 'Todos':
+            pales_filtrados = todos_pales
+        else:
+            pales_filtrados = [p for p in todos_pales if p['grupo'] == grupo_filtro]
+        
+        pales_ord = sorted(pales_filtrados, key=lambda x: (x['fecha'], orden.get(x['sesion'], 99)), reverse=True)
+        
+        for p in pales_ord[:50]:
             fecha = p['fecha'].strftime('%d/%m/%Y') if pd.notna(p['fecha']) else '-'
             st.markdown(f"**{fecha}** ({p['sesion']}) - {p['grupo']}: {', '.join(p['numeros'])}")
+        
+        st.caption(f"Mostrando {min(50, len(pales_ord))} de {len(pales_ord)} pales")
+    
+    # === TAB 4: GRUPOS ===
+    with tab4:
+        st.header("ℹ️ Información de Grupos")
+        
+        for grupo, datos in GRUPOS.items():
+            st.subheader(f"{'🔒' if grupo == 'CERRADOS' else '🔓' if grupo == 'ABIERTOS' else '📏'} {grupo}")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**Dígitos:** {INFO[grupo]['digitos']}")
+            with col2:
+                st.write(f"**Cantidad de números:** {INFO[grupo]['cant']}")
+            
+            nums_str = ", ".join([f"{n:02d}" for n in sorted(datos['numeros'])])
+            st.write(f"**Números:** {nums_str}")
+            st.markdown("---")
 
 if __name__ == "__main__":
     main()
