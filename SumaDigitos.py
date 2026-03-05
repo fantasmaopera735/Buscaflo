@@ -1,490 +1,735 @@
 # -*- coding: utf-8 -*-
 """
-SumaDigitos - Análisis de Sumas
-Hoja: Geotodo (M=Mañana, T=Tarde, N=Noche)
+SumaDigitos - Análisis de Sumas para Geotodo (Mañana, Tarde y Noche)
+=====================================================================
+Calcula y analiza las sumas de dígitos:
+- Suma Fijo: suma de dígitos del Fijo (0-18)
+- Suma Corrido1: suma de dígitos del 1er Corrido (0-18)
+- Suma Corrido2: suma de dígitos del 2do Corrido (0-18)
+- Suma Total: Suma_Fijo + Suma_Corr1 + Suma_Corr2 (0-54)
+- Suma Corridos: Suma_Corr1 + Suma_Corr2 (0-36)
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime
-from collections import defaultdict
-import calendar
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-import os
+from google.oauth2.service_account import Credentials
+import calendar
+from collections import Counter
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 
-if __name__ == "__main__":
-    st.set_page_config(page_title="SumaDigitos", page_icon="🔢", layout="wide")
-
-GS_ID = '1ID79C3pz3w5L2oA6krl9LjYEZstPgCGLoqw3FQ1qXDw'
-GS_SHEET = 'Geotodo'
-COL_FECHA = 'Fecha'
-COL_SESION = 'Tipo_Sorteo'
-COL_FIJO = 'Fijo'
-COL_CORR1 = 'Primer_Corrido'
-COL_CORR2 = 'Segundo_Corrido'
-
-MAPEO = {
-    't': 'Tarde', 'tarde': 'Tarde',
-    'n': 'Noche', 'noche': 'Noche',
-    'm': 'Mañana', 'mañana': 'Mañana', 'manana': 'Mañana'
-}
-
-SUMA_NUMEROS = {}
-for i in range(100):
-    suma = int(f"{i:02d}"[0]) + int(f"{i:02d}"[1])
-    if suma not in SUMA_NUMEROS:
-        SUMA_NUMEROS[suma] = []
-    SUMA_NUMEROS[suma].append(i)
-
-# Números que componen cada suma de corridos (0-36)
-SUMA_CORRIDOS_NUMEROS = {}
-for c1 in range(100):
-    for c2 in range(100):
-        s1 = int(f"{c1:02d}"[0]) + int(f"{c1:02d}"[1])
-        s2 = int(f"{c2:02d}"[0]) + int(f"{c2:02d}"[1])
-        suma_total = s1 + s2
-        if suma_total not in SUMA_CORRIDOS_NUMEROS:
-            SUMA_CORRIDOS_NUMEROS[suma_total] = []
-        if (c1, c2) not in SUMA_CORRIDOS_NUMEROS[suma_total]:
-            SUMA_CORRIDOS_NUMEROS[suma_total].append((c1, c2))
+# --- CONFIGURACIÓN GOOGLE SHEETS ---
+SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+SPREADSHEET_ID = "1ID79C3pz3w5L2oA6krl9LjYEZstPgCGLoqw3FQ1qXDw"
 
 @st.cache_resource
-def conectar():
+def get_gsheet_client():
     try:
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        
-        try:
-            if 'gcp_service_account' in st.secrets:
-                from google.oauth2.service_account import Credentials
-                creds_dict = dict(st.secrets['gcp_service_account'])
-                creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-                return gspread.authorize(creds)
-        except:
-            pass
-        
-        for f in ['credentials.json', 'credenciales.json']:
-            if os.path.exists(f):
-                creds = ServiceAccountCredentials.from_json_keyfile_name(f, scope)
-                return gspread.authorize(creds)
-        return None
-    except Exception as e:
-        st.error(f"Error: {e}")
-        return None
-
-def cargar_datos(gc, archivo_id, nombre_hoja):
-    if gc:
-        try:
-            spreadsheet = gc.open_by_key(archivo_id)
-            worksheet = spreadsheet.worksheet(nombre_hoja)
-            return pd.DataFrame(worksheet.get_all_records())
-        except Exception as e:
-            st.error(f"Error: {e}")
-    return None
-
-def parsear_fecha(f):
-    if pd.isna(f):
-        return None
-    for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d']:
-        try:
-            return datetime.strptime(str(f).strip(), fmt)
-        except:
-            continue
-    return None
-
-def normalizar_sesion(s):
-    if pd.isna(s):
-        return None
-    return MAPEO.get(str(s).strip().lower(), s)
-
-def suma_digitos(n):
-    try:
-        s = f"{int(n):02d}"
-        return int(s[0]) + int(s[1])
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
+        return gspread.authorize(creds)
     except:
-        return None
+        import os
+        creds_path = 'credentials.json'
+        if os.path.exists(creds_path):
+            creds = Credentials.from_service_account_file(creds_path, scopes=SCOPE)
+            return gspread.authorize(creds)
+        raise Exception("No se encontraron credenciales")
 
-def calcular_estadisticas_suma(df, col_suma, suma, fecha_max):
-    """Calcula estadísticas para una suma específica"""
-    df_s = df[df[col_suma] == suma].copy()
-    
-    if len(df_s) == 0:
-        return {
-            'frecuencia': 0,
-            'promedio_dias': 0,
-            'ausencia_maxima': 0,
-            'dias_sin_aparecer': 0,
-            'ultima_fecha': None
-        }
-    
-    fechas = df_s['Fecha_Parsed'].dropna().sort_values().tolist()
-    
-    if not fechas:
-        return {
-            'frecuencia': 0,
-            'promedio_dias': 0,
-            'ausencia_maxima': 0,
-            'dias_sin_aparecer': 0,
-            'ultima_fecha': None
-        }
-    
-    gaps = []
-    for i in range(1, len(fechas)):
-        gap = (fechas[i] - fechas[i-1]).days
-        if gap > 0:
-            gaps.append(gap)
-    
-    frecuencia = len(fechas)
-    promedio_dias = round(np.mean(gaps), 1) if gaps else 0
-    ausencia_maxima = max(gaps) if gaps else 0
-    ultima_fecha = fechas[-1]
-    dias_sin_aparecer = (fecha_max - ultima_fecha).days if ultima_fecha and pd.notna(fecha_max) else 0
-    
-    return {
-        'frecuencia': frecuencia,
-        'promedio_dias': promedio_dias,
-        'ausencia_maxima': ausencia_maxima,
-        'dias_sin_aparecer': dias_sin_aparecer,
-        'ultima_fecha': ultima_fecha
-    }
+def get_worksheet(sheet_name):
+    client = get_gsheet_client()
+    return client.open_by_key(SPREADSHEET_ID).worksheet(sheet_name)
 
-def analizar_pronostico_tarde_noche_manana(df):
-    """Analiza: Si en Tarde y Noche sale suma X, qué sale en Mañana del día siguiente"""
-    patrones = {}
-    conteo_total = {}
-    
-    for fecha, grupo in df.groupby('Fecha_Parsed'):
-        if pd.isna(fecha):
-            continue
-        
-        sumas = {}
-        for _, row in grupo.iterrows():
-            ses = str(row['Sesion']).lower() if pd.notna(row['Sesion']) else ''
-            suma = int(row['Suma_Fijo']) if pd.notna(row['Suma_Fijo']) else None
-            if suma is not None:
-                if ses in ['tarde', 't']:
-                    sumas['tarde'] = suma
-                elif ses in ['noche', 'n']:
-                    sumas['noche'] = suma
-                elif ses in ['mañana', 'manana', 'm']:
-                    sumas['mañana'] = suma
-        
-        fecha_siguiente = fecha + pd.Timedelta(days=1)
-        df_siguiente = df[df['Fecha_Parsed'] == fecha_siguiente]
-        
-        if 'tarde' in sumas and 'noche' in sumas and len(df_siguiente) > 0:
-            suma_tarde = sumas['tarde']
-            suma_noche = sumas['noche']
-            key = (suma_tarde, suma_noche)
-            
-            if key not in patrones:
-                patrones[key] = {}
-                conteo_total[key] = 0
-            
-            for _, row_sig in df_siguiente.iterrows():
-                ses_sig = str(row_sig['Sesion']).lower() if pd.notna(row_sig['Sesion']) else ''
-                if ses_sig in ['mañana', 'manana', 'm']:
-                    suma_manana = int(row_sig['Suma_Fijo']) if pd.notna(row_sig['Suma_Fijo']) else None
-                    if suma_manana is not None:
-                        if suma_manana not in patrones[key]:
-                            patrones[key][suma_manana] = 0
-                        patrones[key][suma_manana] += 1
-                        conteo_total[key] += 1
-    
-    return patrones, conteo_total
+# --- FUNCIONES DE SUMA ---
+def suma_digitos(numero):
+    """Calcula la suma de los dígitos de un número de 2 dígitos (00-99)"""
+    try:
+        n = int(float(numero))
+        return (n // 10) + (n % 10)
+    except:
+        return 0
 
-def analizar_almanaque(df, dia_inicio, dia_fin, cantidad_meses, col_suma):
-    """Analiza sumas por meses"""
-    hoy = datetime.now()
-    meses_analizar = []
-    
-    for i in range(1, cantidad_meses + 1):
-        mes_target = hoy.month - i
-        año_target = hoy.year
-        while mes_target <= 0:
-            mes_target += 12
-            año_target -= 1
-        try:
-            fecha_ini_mes = datetime(año_target, mes_target, dia_inicio)
-            dias_en_mes = calendar.monthrange(año_target, mes_target)[1]
-            fecha_fin_mes = datetime(año_target, mes_target, min(dia_fin, dias_en_mes))
-            meses_analizar.append({
-                'fecha_ini': fecha_ini_mes, 
-                'fecha_fin': fecha_fin_mes,
-                'nombre_mes': fecha_ini_mes.strftime('%B %Y')
-            })
-        except ValueError:
-            continue
-    
-    resultados_meses = {}
-    sumas_por_mes = {}
-    
-    for mes_info in meses_analizar:
-        df_mes = df[(df['Fecha_Parsed'] >= mes_info['fecha_ini']) & (df['Fecha_Parsed'] <= mes_info['fecha_fin'])].copy()
-        sumas_mes = df_mes[col_suma].value_counts().to_dict() if col_suma in df_mes.columns else {}
-        sumas_por_mes[mes_info['nombre_mes']] = sumas_mes
-        resultados_meses[mes_info['nombre_mes']] = {
-            'total_sorteos': len(df_mes),
-            'sumas': sumas_mes
-        }
-    
-    sumas_persistentes = set()
-    if sumas_por_mes:
-        conjuntos = [set(s.keys()) for s in sumas_por_mes.values() if s]
-        if conjuntos:
-            sumas_persistentes = set.intersection(*conjuntos)
-    
-    return {
-        'meses_analizados': meses_analizar,
-        'resultados_por_mes': resultados_meses,
-        'sumas_persistentes': sumas_persistentes,
-        'sumas_por_mes': sumas_por_mes
-    }
+def obtener_numeros_que_suman(suma_objetivo):
+    """Devuelve todos los números de 2 dígitos que suman el valor objetivo"""
+    numeros = []
+    for n in range(100):
+        if suma_digitos(n) == suma_objetivo:
+            numeros.append(f"{n:02d}")
+    return numeros
 
-def main():
-    st.title("🔢 SumaDigitos - Análisis de Sumas")
-    st.markdown("**Hoja: Geotodo** | Sesiones: Mañana, Tarde y Noche")
-    
-    gc = conectar()
-    if not gc:
-        st.error("Sin conexión")
-        return
-    
-    df = cargar_datos(gc, GS_ID, GS_SHEET)
-    if df is None or len(df) == 0:
-        st.error("Sin datos")
-        return
-    
-    st.success(f"✅ {len(df)} registros")
-    
-    # Procesar datos
-    df['Fecha_Parsed'] = df[COL_FECHA].apply(parsear_fecha)
-    df['Sesion'] = df[COL_SESION].apply(normalizar_sesion)
-    fecha_max = df['Fecha_Parsed'].max()
-    
-    # Calcular sumas
-    df['Suma_Fijo'] = df[COL_FIJO].apply(suma_digitos)
-    df['Suma_Corr1'] = df[COL_CORR1].apply(suma_digitos)
-    df['Suma_Corr2'] = df[COL_CORR2].apply(suma_digitos)
-    df['Suma_Corridos'] = df.apply(lambda x: 
-        (x['Suma_Corr1'] if pd.notna(x['Suma_Corr1']) else 0) + 
-        (x['Suma_Corr2'] if pd.notna(x['Suma_Corr2']) else 0), axis=1)
-    df['Suma_Total'] = df.apply(lambda x: 
-        (x['Suma_Fijo'] if pd.notna(x['Suma_Fijo']) else 0) + 
-        (x['Suma_Corr1'] if pd.notna(x['Suma_Corr1']) else 0) + 
-        (x['Suma_Corr2'] if pd.notna(x['Suma_Corr2']) else 0), axis=1)
-    
-    # Orden para historial: Noche=1, Tarde=2, Mañana=3
-    orden_sesion = {'Noche': 1, 'Tarde': 2, 'Mañana': 3}
-    df['Orden'] = df['Sesion'].map(orden_sesion).fillna(99)
-    
-    # Pestañas
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Suma Fijo", 
-        "🎯 Suma Corridos", 
-        "🔥 Suma Total",
-        "🔮 Pronóstico T+N→M",
-        "📜 Historial"
-    ])
-    
-    # === TAB 1: SUMA FIJO ===
-    with tab1:
-        st.header("📊 Suma del Fijo (00-99)")
+# --- CARGA DE DATOS ---
+@st.cache_data(ttl=60)
+def cargar_datos():
+    try:
+        wks = get_worksheet("Geotodo")
+        data = wks.get_all_records()
+        if not data:
+            return pd.DataFrame()
         
-        # Selector de suma
-        suma_sel = st.selectbox("Selecciona una suma:", list(range(19)), key="sel_fijo")
+        df = pd.DataFrame(data)
+        df.columns = [col.strip().replace('\ufeff', '') for col in df.columns]
         
-        # Mostrar números que componen la suma
-        st.subheader(f"📋 Números que componen la Suma {suma_sel}")
-        nums = SUMA_NUMEROS.get(suma_sel, [])
-        nums_str = ", ".join([f"{n:02d}" for n in nums])
-        st.write(f"**{len(nums)} números:** {nums_str}")
+        # Convertir fecha
+        def convertir_fecha(valor):
+            if pd.isna(valor) or str(valor).strip() == '':
+                return pd.NaT
+            valor_str = str(valor).strip()
+            formatos = ['%d-%m-%Y', '%d/%m/%Y', '%Y-%m-%d', '%d/%m/%y', '%d-%m-%y']
+            for fmt in formatos:
+                try:
+                    return pd.to_datetime(valor_str, format=fmt)
+                except:
+                    continue
+            try:
+                return pd.to_datetime(valor_str, dayfirst=True)
+            except:
+                return pd.NaT
         
-        # Estadísticas
-        stats = calcular_estadisticas_suma(df, 'Suma_Fijo', suma_sel, fecha_max)
+        df['Fecha'] = df['Fecha'].apply(convertir_fecha)
+        df = df.dropna(subset=['Fecha'])
         
-        col1, col2, col3, col4, col5 = st.columns(5)
-        with col1:
-            st.metric("Frecuencia", stats['frecuencia'])
-        with col2:
-            st.metric("Promedio Días", stats['promedio_dias'])
-        with col3:
-            st.metric("Ausencia Máx", f"{stats['ausencia_maxima']} días")
-        with col4:
-            st.metric("Días Sin Aparecer", stats['dias_sin_aparecer'])
-        with col5:
-            fecha_str = stats['ultima_fecha'].strftime('%d/%m/%Y') if stats['ultima_fecha'] else '-'
-            st.metric("Última Fecha", fecha_str)
-        
-        st.markdown("---")
-        
-        # Tabla resumen
-        st.subheader("📋 Resumen de todas las sumas")
-        data = []
-        for s in range(19):
-            st_s = calcular_estadisticas_suma(df, 'Suma_Fijo', s, fecha_max)
-            data.append({
-                'Suma': s,
-                'Números': f"{len(SUMA_NUMEROS.get(s, []))} nums",
-                'Frecuencia': st_s['frecuencia'],
-                'Promedio': st_s['promedio_dias'],
-                'Ausencia Máx': st_s['ausencia_maxima'],
-                'Días Sin Aparecer': st_s['dias_sin_aparecer'],
-                'Última Fecha': st_s['ultima_fecha'].strftime('%d/%m/%Y') if st_s['ultima_fecha'] else '-'
-            })
-        st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
-        
-        st.markdown("---")
-        st.subheader("🏆 Números Más Salidores")
-        top = df[COL_FIJO].value_counts().head(15)
-        st.dataframe(pd.DataFrame({'Número': [f"{n:02d}" for n in top.index], 'Frecuencia': top.values}), use_container_width=True, hide_index=True)
-    
-    # === TAB 2: SUMA CORRIDOS (ALMANAQUE) ===
-    with tab2:
-        st.header("🎯 Suma de los 2 Corridos")
-        st.markdown("*Suma: (Dígitos Corrido1) + (Dígitos Corrido2)*")
-        
-        # Selector de suma
-        max_suma_corr = int(df['Suma_Corridos'].max()) if len(df) > 0 else 36
-        suma_sel = st.selectbox("Selecciona una suma:", list(range(max_suma_corr + 1)), key="sel_corr")
-        
-        # Estadísticas
-        stats = calcular_estadisticas_suma(df, 'Suma_Corridos', suma_sel, fecha_max)
-        
-        col1, col2, col3, col4, col5 = st.columns(5)
-        with col1:
-            st.metric("Frecuencia", stats['frecuencia'])
-        with col2:
-            st.metric("Promedio Días", stats['promedio_dias'])
-        with col3:
-            st.metric("Ausencia Máx", f"{stats['ausencia_maxima']} días")
-        with col4:
-            st.metric("Días Sin Aparecer", stats['dias_sin_aparecer'])
-        with col5:
-            fecha_str = stats['ultima_fecha'].strftime('%d/%m/%Y') if stats['ultima_fecha'] else '-'
-            st.metric("Última Fecha", fecha_str)
-        
-        st.markdown("---")
-        
-        # Almanaque
-        st.subheader("📅 Almanaque")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            dia_inicio = st.number_input("Día inicial:", 1, 31, 1, key="dia_corr")
-        with col2:
-            dia_fin = st.number_input("Día final:", 1, 31, 15, key="fin_corr")
-        with col3:
-            cantidad_meses = st.slider("Meses:", 1, 12, 3, key="meses_corr")
-        
-        if st.button("🔍 Analizar Almanaque Corridos", type="primary"):
-            almanaque = analizar_almanaque(df, dia_inicio, dia_fin, cantidad_meses, 'Suma_Corridos')
-            
-            for mes, datos in almanaque['resultados_por_mes'].items():
-                with st.expander(f"📆 {mes} - {datos['total_sorteos']} sorteos"):
-                    if datos['sumas']:
-                        df_mes = pd.DataFrame([
-                            {'Suma': s, 'Frecuencia': f}
-                            for s, f in sorted(datos['sumas'].items(), key=lambda x: x[1], reverse=True)
-                        ])
-                        st.dataframe(df_mes, use_container_width=True, hide_index=True)
-            
-            if almanaque['sumas_persistentes']:
-                st.success(f"✅ Sumas persistentes: {sorted(almanaque['sumas_persistentes'])}")
-    
-    # === TAB 3: SUMA TOTAL (ALMANAQUE) ===
-    with tab3:
-        st.header("🔥 Suma Total (Fijo + Corrido1 + Corrido2)")
-        st.markdown("*Suma de las 3 sumas individuales*")
-        
-        # Selector de suma
-        max_suma_total = int(df['Suma_Total'].max()) if len(df) > 0 else 54
-        suma_sel = st.selectbox("Selecciona una suma:", sorted(df['Suma_Total'].dropna().unique().astype(int)), key="sel_total")
-        
-        # Estadísticas
-        stats = calcular_estadisticas_suma(df, 'Suma_Total', suma_sel, fecha_max)
-        
-        col1, col2, col3, col4, col5 = st.columns(5)
-        with col1:
-            st.metric("Frecuencia", stats['frecuencia'])
-        with col2:
-            st.metric("Promedio Días", stats['promedio_dias'])
-        with col3:
-            st.metric("Ausencia Máx", f"{stats['ausencia_maxima']} días")
-        with col4:
-            st.metric("Días Sin Aparecer", stats['dias_sin_aparecer'])
-        with col5:
-            fecha_str = stats['ultima_fecha'].strftime('%d/%m/%Y') if stats['ultima_fecha'] else '-'
-            st.metric("Última Fecha", fecha_str)
-        
-        st.markdown("---")
-        
-        # Almanaque
-        st.subheader("📅 Almanaque")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            dia_inicio = st.number_input("Día inicial:", 1, 31, 1, key="dia_total")
-        with col2:
-            dia_fin = st.number_input("Día final:", 1, 31, 15, key="fin_total")
-        with col3:
-            cantidad_meses = st.slider("Meses:", 1, 12, 3, key="meses_total")
-        
-        if st.button("🔍 Analizar Almanaque Total", type="primary"):
-            almanaque = analizar_almanaque(df, dia_inicio, dia_fin, cantidad_meses, 'Suma_Total')
-            
-            for mes, datos in almanaque['resultados_por_mes'].items():
-                with st.expander(f"📆 {mes} - {datos['total_sorteos']} sorteos"):
-                    if datos['sumas']:
-                        df_mes = pd.DataFrame([
-                            {'Suma': s, 'Frecuencia': f}
-                            for s, f in sorted(datos['sumas'].items(), key=lambda x: x[1], reverse=True)
-                        ])
-                        st.dataframe(df_mes, use_container_width=True, hide_index=True)
-            
-            if almanaque['sumas_persistentes']:
-                st.success(f"✅ Sumas persistentes: {sorted(almanaque['sumas_persistentes'])}")
-    
-    # === TAB 4: PRONÓSTICO TARDE+NOCHE → MAÑANA ===
-    with tab4:
-        st.header("🔮 Pronóstico: Tarde + Noche → Mañana")
-        st.markdown("*Si en la Tarde sale X y en la Noche sale Y, qué suele salir en la Mañana del día siguiente*")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            suma_tarde = st.selectbox("Suma en Tarde:", list(range(19)), key="p_tarde")
-        with col2:
-            suma_noche = st.selectbox("Suma en Noche:", list(range(19)), key="p_noche")
-        
-        patrones, conteo = analizar_pronostico_tarde_noche_manana(df)
-        key = (suma_tarde, suma_noche)
-        
-        if key in patrones and patrones[key]:
-            total = conteo[key]
-            st.info(f"📊 Se encontraron **{total}** patrones con Tarde={suma_tarde} y Noche={suma_noche}")
-            
-            df_p = pd.DataFrame([
-                {'Suma Mañana': s, 'Veces': v, 'Porcentaje': f"{v/total*100:.1f}%"}
-                for s, v in sorted(patrones[key].items(), key=lambda x: x[1], reverse=True)
-            ])
-            st.dataframe(df_p, use_container_width=True, hide_index=True)
+        # Normalizar tipo sorteo (M=Mañana, T=Tarde, N=Noche)
+        if 'Tipo_Sorteo' in df.columns:
+            df['Tipo_Sorteo'] = df['Tipo_Sorteo'].astype(str).str.strip().str.upper()
+            df['Tipo_Sorteo'] = df['Tipo_Sorteo'].apply(lambda x: 
+                'M' if x in ['M', 'MAÑANA', 'MANANA', 'MAÑANA/', 'MANANA/'] else
+                'T' if x in ['T', 'TARDE', 'TARDE/'] else
+                'N' if x in ['N', 'NOCHE', '/NOCHE', 'NOCHE/'] else
+                'M' if 'MAÑANA' in x or 'MANANA' in x else
+                'T' if 'TARDE' in x else 'N' if 'NOCHE' in x else 'OTRO')
         else:
-            st.warning("No hay datos históricos para esta combinación")
-    
-    # === TAB 5: HISTORIAL ===
-    with tab5:
-        st.header("📜 Historial")
-        st.markdown("**Orden:** Fecha descendente. Dentro de cada día: Noche → Tarde → Mañana")
+            df['Tipo_Sorteo'] = 'OTRO'
         
-        tipo_hist = st.selectbox("Ver suma de:", ['Fijo', 'Corridos', 'Total'], key="tipo_hist")
-        cantidad = st.number_input("Registros:", 10, 200, 50)
+        # Identificar columnas de números
+        col_fijo = 'Fijo'
+        col_corr1 = None
+        col_corr2 = None
         
-        col_suma = {'Fijo': 'Suma_Fijo', 'Corridos': 'Suma_Corridos', 'Total': 'Suma_Total'}[tipo_hist]
+        for col in df.columns:
+            col_lower = col.lower().strip()
+            if '1er' in col_lower or 'primer' in col_lower:
+                col_corr1 = col
+            elif '2do' in col_lower or 'segundo' in col_lower:
+                col_corr2 = col
         
-        df_h = df.sort_values(['Fecha_Parsed', 'Orden'], ascending=[False, True]).head(cantidad).copy()
-        df_h['Fecha'] = df_h['Fecha_Parsed'].apply(lambda x: x.strftime('%d/%m/%Y') if pd.notna(x) else '-')
-        df_h['Fijo'] = df_h[COL_FIJO].apply(lambda x: f"{int(x):02d}" if pd.notna(x) else '-')
+        if col_corr1 is None and len(df.columns) >= 5:
+            col_corr1 = df.columns[4]
+        if col_corr2 is None and len(df.columns) >= 6:
+            col_corr2 = df.columns[5]
         
-        st.dataframe(df_h[['Fecha', 'Sesion', 'Fijo', col_suma]].reset_index(drop=True), use_container_width=True, hide_index=True)
+        # Calcular sumas
+        df['Suma_Fijo'] = df[col_fijo].apply(suma_digitos)
+        if col_corr1:
+            df['Suma_Corr1'] = df[col_corr1].apply(suma_digitos)
+        else:
+            df['Suma_Corr1'] = 0
+        if col_corr2:
+            df['Suma_Corr2'] = df[col_corr2].apply(suma_digitos)
+        else:
+            df['Suma_Corr2'] = 0
+        
+        df['Suma_Total'] = df['Suma_Fijo'] + df['Suma_Corr1'] + df['Suma_Corr2']
+        df['Suma_Corridos'] = df['Suma_Corr1'] + df['Suma_Corr2']
+        
+        # Guardar números originales
+        df['Fijo_Num'] = df[col_fijo].apply(lambda x: f"{int(float(x)):02d}" if pd.notna(x) else "00")
+        if col_corr1:
+            df['Corr1_Num'] = df[col_corr1].apply(lambda x: f"{int(float(x)):02d}" if pd.notna(x) else "00")
+        else:
+            df['Corr1_Num'] = "00"
+        if col_corr2:
+            df['Corr2_Num'] = df[col_corr2].apply(lambda x: f"{int(float(x)):02d}" if pd.notna(x) else "00")
+        else:
+            df['Corr2_Num'] = "00"
+        
+        return df
+    except Exception as e:
+        st.error(f"Error cargando datos: {e}")
+        return pd.DataFrame()
 
-if __name__ == "__main__":
-    main()
+# --- FUNCIONES DE ESTADÍSTICAS ---
+def calcular_estadisticas_suma(df, tipo_sesion=None):
+    """
+    Calcula estadísticas para cada suma.
+    Retorna diccionario con estadísticas para Suma_Fijo, Suma_Total y Suma_Corridos.
+    """
+    if tipo_sesion and tipo_sesion != 'Todas':
+        df = df[df['Tipo_Sorteo'] == tipo_sesion].copy()
+    
+    resultados = {}
+    hoy = datetime.now().date()
+    
+    for tipo_suma in ['Suma_Fijo', 'Suma_Total', 'Suma_Corridos']:
+        if tipo_suma == 'Suma_Fijo':
+            rango_sumas = range(19)  # 0-18
+        elif tipo_suma == 'Suma_Total':
+            rango_sumas = range(55)  # 0-54
+        else:  # Suma_Corridos
+            rango_sumas = range(37)  # 0-36
+        
+        stats = []
+        
+        for suma in rango_sumas:
+            df_suma = df[df[tipo_suma] == suma].sort_values('Fecha')
+            fechas = df_suma['Fecha'].dt.date.tolist()
+            
+            if len(fechas) == 0:
+                stats.append({
+                    'Suma': suma,
+                    'Frecuencia': 0,
+                    'Ausencia_Maxima': 999,
+                    'Promedio_Dias': 0,
+                    'Dias_Sin_Aparecer': 999,
+                    'Ultima_Fecha': None
+                })
+            else:
+                frecuencia = len(fechas)
+                ultima_fecha = fechas[-1]
+                dias_sin_aparecer = (hoy - ultima_fecha).days
+                
+                if len(fechas) >= 2:
+                    gaps = [(fechas[i+1] - fechas[i]).days for i in range(len(fechas)-1)]
+                    ausencia_maxima = max(gaps)
+                    promedio_dias = round(np.mean(gaps), 1)
+                else:
+                    ausencia_maxima = dias_sin_aparecer
+                    promedio_dias = dias_sin_aparecer
+                
+                stats.append({
+                    'Suma': suma,
+                    'Frecuencia': frecuencia,
+                    'Ausencia_Maxima': ausencia_maxima,
+                    'Promedio_Dias': promedio_dias,
+                    'Dias_Sin_Aparecer': dias_sin_aparecer,
+                    'Ultima_Fecha': ultima_fecha
+                })
+        
+        resultados[tipo_suma] = pd.DataFrame(stats)
+    
+    return resultados
+
+def generar_almanaque_sumas(df, tipo_suma, dia_inicio, dia_fin, meses_atras, tipo_sesion=None):
+    """
+    Genera almanaque de SUMAS (no números) para el período especificado.
+    """
+    if tipo_sesion and tipo_sesion != 'Todas':
+        df = df[df['Tipo_Sorteo'] == tipo_sesion].copy()
+    
+    fecha_hoy = datetime.now()
+    mes_actual = fecha_hoy.month
+    anio_actual = fecha_hoy.year
+    
+    bloques_validos = []
+    nombres_bloques = []
+    
+    # NO incluir el mes actual
+    for offset in range(1, meses_atras + 1):
+        f_obj = fecha_hoy - relativedelta(months=offset)
+        if f_obj.month == mes_actual and f_obj.year == anio_actual:
+            continue
+        
+        try:
+            last_day = calendar.monthrange(f_obj.year, f_obj.month)[1]
+            f_i = datetime(f_obj.year, f_obj.month, min(dia_inicio, last_day))
+            f_f = datetime(f_obj.year, f_obj.month, min(dia_fin, last_day))
+            if f_i > f_f:
+                continue
+            df_b = df[(df['Fecha'] >= f_i) & (df['Fecha'] <= f_f)]
+            if not df_b.empty:
+                bloques_validos.append(df_b)
+                nombres_bloques.append(f"{f_i.strftime('%d/%m')}-{f_f.strftime('%d/%m')}")
+        except:
+            continue
+    
+    if not bloques_validos:
+        # Fallback: usar mes completo
+        for offset in range(1, meses_atras + 1):
+            f_obj = fecha_hoy - relativedelta(months=offset)
+            if f_obj.month == mes_actual and f_obj.year == anio_actual:
+                continue
+            try:
+                f_i = datetime(f_obj.year, f_obj.month, 1)
+                last_day = calendar.monthrange(f_obj.year, f_obj.month)[1]
+                f_f = datetime(f_obj.year, f_obj.month, last_day)
+                df_b = df[(df['Fecha'] >= f_i) & (df['Fecha'] <= f_f)]
+                if not df_b.empty:
+                    bloques_validos.append(df_b)
+                    nombres_bloques.append(f"{f_obj.strftime('%b')} (Todo)")
+            except:
+                continue
+    
+    if not bloques_validos:
+        return {'success': False, 'mensaje': 'Sin datos históricos'}
+    
+    # Concatenar todos los bloques
+    df_total = pd.concat(bloques_validos)
+    
+    # Definir rango de sumas según tipo
+    if tipo_suma == 'Suma_Fijo':
+        rango_sumas = range(19)  # 0-18
+    elif tipo_suma == 'Suma_Total':
+        rango_sumas = range(55)  # 0-54
+    else:
+        rango_sumas = range(37)  # 0-36
+    
+    # Contar frecuencias de SUMAS
+    conteo_sumas = df_total[tipo_suma].value_counts()
+    
+    # Crear ranking de sumas
+    ranking = []
+    for suma in rango_sumas:
+        freq = conteo_sumas.get(suma, 0)
+        ranking.append({
+            'Suma': suma,
+            'Frecuencia': freq
+        })
+    
+    df_rank = pd.DataFrame(ranking).sort_values('Frecuencia', ascending=False)
+    
+    # Clasificar sumas
+    def clasificar_sumas(df_rank):
+        df_t = df_rank.copy()
+        total_sumas = len(df_t)
+        conds = [
+            df_t.index < total_sumas // 3,
+            df_t.index < 2 * total_sumas // 3
+        ]
+        vals = ['🔥 Caliente', '🟡 Tibio']
+        df_t['Estado'] = np.select(conds, vals, default='🧊 Frío')
+        return df_t
+    
+    df_rank = clasificar_sumas(df_rank)
+    
+    # Sumas persistentes (aparecen en TODOS los bloques)
+    sumas_persistentes = []
+    for suma in rango_sumas:
+        aparece_en_todos = all(suma in bloque[tipo_suma].values for bloque in bloques_validos)
+        if aparece_en_todos:
+            sumas_persistentes.append(suma)
+    
+    # Sumas calientes
+    sumas_calientes = df_rank[df_rank['Estado'] == '🔥 Caliente']['Suma'].tolist()
+    
+    # Historial del período actual
+    hoy = datetime.now()
+    estado_periodo = ""
+    df_historial_actual = pd.DataFrame()
+    
+    try:
+        fin_mes = calendar.monthrange(hoy.year, hoy.month)[1]
+        fecha_ini = datetime(hoy.year, hoy.month, min(dia_inicio, fin_mes))
+        fecha_fin = datetime(hoy.year, hoy.month, min(dia_fin, fin_mes))
+        
+        if hoy.date() < fecha_ini.date():
+            estado_periodo = f"⚪ Período inicia el {fecha_ini.strftime('%d/%m')}"
+        else:
+            fecha_fin_real = min(hoy, fecha_fin)
+            df_eval = df[(df['Fecha'] >= fecha_ini) & (df['Fecha'] <= fecha_fin_real)]
+            
+            if not df_eval.empty:
+                historial = []
+                for _, row in df_eval.iterrows():
+                    suma_val = row[tipo_suma]
+                    estado = df_rank[df_rank['Suma'] == suma_val]['Estado'].values
+                    estado_val = estado[0] if len(estado) > 0 else '❓'
+                    es_persistente = suma_val in sumas_persistentes
+                    
+                    historial.append({
+                        'Fecha': row['Fecha'],
+                        'Sesión': row['Tipo_Sorteo'],
+                        'Suma': suma_val,
+                        'Estado': estado_val,
+                        'Persistente': '✅ SÍ' if es_persistente else '❌ NO',
+                        'Fijo': row.get('Fijo_Num', '00'),
+                        'Corr1': row.get('Corr1_Num', '00'),
+                        'Corr2': row.get('Corr2_Num', '00')
+                    })
+                df_historial_actual = pd.DataFrame(historial)
+                # Ordenar: Noche → Tarde → Mañana (más reciente primero)
+                orden_sesion = {'N': 0, 'T': 1, 'M': 2}
+                df_historial_actual['orden'] = df_historial_actual['Sesión'].map(orden_sesion).fillna(3)
+                df_historial_actual = df_historial_actual.sort_values(['Fecha', 'orden'], ascending=[False, True])
+                df_historial_actual = df_historial_actual.drop(columns=['orden'])
+            
+            estado_periodo = f"🟢 Período activo (hasta {fecha_fin_real.strftime('%d/%m')})"
+    except Exception as e:
+        estado_periodo = f"Error: {str(e)}"
+    
+    # Sumas faltantes del período actual
+    df_faltantes = pd.DataFrame()
+    if not df_historial_actual.empty and sumas_calientes:
+        salidas = set(df_historial_actual['Suma'].unique())
+        faltantes = [s for s in sumas_calientes if s not in salidas]
+        if faltantes:
+            df_faltantes = pd.DataFrame([{'Suma Faltante': s, 'Estado': '⏳ Pendiente'} for s in sorted(faltantes)])
+    
+    return {
+        'success': True,
+        'df_rank': df_rank,
+        'sumas_persistentes': sumas_persistentes,
+        'sumas_calientes': sumas_calientes,
+        'nombres_bloques': nombres_bloques,
+        'df_historial_actual': df_historial_actual,
+        'df_faltantes': df_faltantes,
+        'estado_periodo': estado_periodo
+    }
+
+def buscar_suma_detalle(df, tipo_suma, suma_buscar, tipo_sesion=None):
+    """
+    Busca una suma específica y muestra todas las veces que apareció
+    junto con los números que la componen.
+    """
+    if tipo_sesion and tipo_sesion != 'Todas':
+        df = df[df['Tipo_Sorteo'] == tipo_sesion].copy()
+    
+    df_filtrado = df[df[tipo_suma] == suma_buscar].sort_values('Fecha', ascending=False)
+    
+    if df_filtrado.empty:
+        return None
+    
+    resultados = []
+    for _, row in df_filtrado.iterrows():
+        resultados.append({
+            'Fecha': row['Fecha'].strftime('%d/%m/%Y'),
+            'Sesión': row['Tipo_Sorteo'],
+            'Fijo': row['Fijo_Num'],
+            'Suma Fijo': row['Suma_Fijo'],
+            'Corr1': row['Corr1_Num'],
+            'Suma C1': row['Suma_Corr1'],
+            'Corr2': row['Corr2_Num'],
+            'Suma C2': row['Suma_Corr2'],
+            'Suma Total': row['Suma_Total'],
+            'Suma Corridos': row['Suma_Corridos']
+        })
+    
+    return pd.DataFrame(resultados)
+
+# --- PRONÓSTICO ---
+def analizar_pronostico(df, dias_atras=30):
+    """
+    Analiza patrones para generar pronóstico.
+    Para Geotodo: Tarde + Noche → Mañana siguiente
+    """
+    hoy = datetime.now()
+    fecha_inicio = hoy - timedelta(days=dias_atras)
+    df_reciente = df[df['Fecha'] >= fecha_inicio].copy()
+    
+    if df_reciente.empty:
+        return None
+    
+    # Análisis de suma del día completo
+    df_reciente['Suma_Dia'] = df_reciente.groupby(df_reciente['Fecha'].dt.date)['Suma_Total'].transform('sum')
+    
+    # Sumas más frecuentes recientes
+    sumas_frecuentes = df_reciente['Suma_Total'].value_counts().head(10)
+    
+    # Sumas que más han salido en Noche
+    df_noche = df_reciente[df_reciente['Tipo_Sorteo'] == 'N']
+    sumas_noche = df_noche['Suma_Total'].value_counts().head(5) if not df_noche.empty else pd.Series()
+    
+    # Sumas que más han salido en Mañana
+    df_manana = df_reciente[df_reciente['Tipo_Sorteo'] == 'M']
+    sumas_manana = df_manana['Suma_Total'].value_counts().head(5) if not df_manana.empty else pd.Series()
+    
+    return {
+        'sumas_frecuentes': sumas_frecuentes,
+        'sumas_noche': sumas_noche,
+        'sumas_manana': sumas_manana
+    }
+
+# --- APLICACIÓN PRINCIPAL ---
+st.set_page_config(page_title="SumaDigitos - Análisis de Sumas", page_icon="🔢", layout="wide")
+
+st.title("🔢 SumaDigitos - Análisis de Sumas (Mañana, Tarde y Noche)")
+st.markdown("""
+**Suma de dígitos:** Para un número de 2 dígitos, se suman sus componentes.
+- Ejemplo: 69 → 6+9 = 15 | 00 → 0+0 = 0 | 99 → 9+9 = 18
+
+**Tipos de suma:**
+- **Suma Fijo:** Suma de dígitos del Fijo (rango: 0-18)
+- **Suma Total:** Suma_Fijo + Suma_Corr1 + Suma_Corr2 (rango: 0-54)
+- **Suma Corridos:** Suma_Corr1 + Suma_Corr2 (rango: 0-36)
+
+**Sesiones:** M = Mañana | T = Tarde | N = Noche
+""")
+
+# Cargar datos
+with st.spinner("Cargando datos..."):
+    df = cargar_datos()
+
+if df.empty:
+    st.error("No se pudieron cargar los datos")
+    st.stop()
+
+# Sidebar
+st.sidebar.header("⚙️ Configuración")
+tipo_sesion = st.sidebar.selectbox("Sesión", ['Todas', 'M', 'T', 'N'], 
+                                   format_func=lambda x: {'Todas': 'Todas', 'M': 'Mañana', 'T': 'Tarde', 'N': 'Noche'}.get(x, x))
+
+# Pestañas principales
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Estadísticas", "📅 Almanaque Suma Total", "📅 Almanaque Suma Corridos", "📅 Almanaque Suma Fijo", "🔍 Buscar Suma", "🎯 Pronóstico"])
+
+# === TAB 1: ESTADÍSTICAS ===
+with tab1:
+    st.header("📊 Estadísticas de Sumas")
+    
+    with st.spinner("Calculando estadísticas..."):
+        stats = calcular_estadisticas_suma(df, tipo_sesion if tipo_sesion != 'Todas' else None)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.subheader("🔢 Suma Fijo (0-18)")
+        df_fijo = stats['Suma_Fijo'].copy()
+        df_fijo['Ultima_Fecha'] = df_fijo['Ultima_Fecha'].apply(lambda x: x.strftime('%d/%m/%Y') if x else 'N/A')
+        df_fijo = df_fijo.rename(columns={
+            'Suma': 'Suma',
+            'Frecuencia': 'Freq',
+            'Ausencia_Maxima': 'Aus.Máx',
+            'Promedio_Dias': 'Prom.',
+            'Dias_Sin_Aparecer': 'Días Sin',
+            'Ultima_Fecha': 'Última'
+        })
+        df_fijo = df_fijo.sort_values('Freq', ascending=False)
+        st.dataframe(df_fijo, use_container_width=True, hide_index=True)
+    
+    with col2:
+        st.subheader("➕ Suma Total (0-54)")
+        df_total = stats['Suma_Total'].copy()
+        df_total = df_total[df_total['Frecuencia'] > 0]
+        df_total['Ultima_Fecha'] = df_total['Ultima_Fecha'].apply(lambda x: x.strftime('%d/%m/%Y') if x else 'N/A')
+        df_total = df_total.rename(columns={
+            'Suma': 'Suma',
+            'Frecuencia': 'Freq',
+            'Ausencia_Maxima': 'Aus.Máx',
+            'Promedio_Dias': 'Prom.',
+            'Dias_Sin_Aparecer': 'Días Sin',
+            'Ultima_Fecha': 'Última'
+        })
+        df_total = df_total.sort_values('Freq', ascending=False)
+        st.dataframe(df_total.head(25), use_container_width=True, hide_index=True)
+    
+    with col3:
+        st.subheader("🎲 Suma Corridos (0-36)")
+        df_corr = stats['Suma_Corridos'].copy()
+        df_corr = df_corr[df_corr['Frecuencia'] > 0]
+        df_corr['Ultima_Fecha'] = df_corr['Ultima_Fecha'].apply(lambda x: x.strftime('%d/%m/%Y') if x else 'N/A')
+        df_corr = df_corr.rename(columns={
+            'Suma': 'Suma',
+            'Frecuencia': 'Freq',
+            'Ausencia_Maxima': 'Aus.Máx',
+            'Promedio_Dias': 'Prom.',
+            'Dias_Sin_Aparecer': 'Días Sin',
+            'Ultima_Fecha': 'Última'
+        })
+        df_corr = df_corr.sort_values('Freq', ascending=False)
+        st.dataframe(df_corr.head(25), use_container_width=True, hide_index=True)
+
+# === TAB 2: ALMANAQUE SUMA TOTAL ===
+with tab2:
+    st.header("📅 Almanaque Suma Total (Fijo + Corrido1 + Corrido2)")
+    
+    col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
+    with col_cfg1:
+        dia_ini = st.number_input("Día inicio", 1, 31, 1, key="alm_total_ini")
+    with col_cfg2:
+        dia_fin = st.number_input("Día fin", 1, 31, 15, key="alm_total_fin")
+    with col_cfg3:
+        meses_atras = st.number_input("Meses atrás", 1, 24, 6, key="alm_total_meses")
+    
+    if st.button("Generar Almanaque Suma Total", key="btn_alm_total"):
+        with st.spinner("Generando almanaque..."):
+            resultado = generar_almanaque_sumas(df, 'Suma_Total', dia_ini, dia_fin, meses_atras,
+                                                tipo_sesion if tipo_sesion != 'Todas' else None)
+        
+        if not resultado['success']:
+            st.warning(resultado.get('mensaje', 'Sin datos'))
+        else:
+            st.info(f"📅 Períodos analizados: {', '.join(resultado['nombres_bloques'])}")
+            
+            if resultado['sumas_persistentes']:
+                st.success(f"🔥 **Sumas Persistentes:** {resultado['sumas_persistentes']}")
+            else:
+                st.info("No hay sumas persistentes en todos los bloques")
+            
+            st.subheader("📊 Ranking de Sumas")
+            df_rank = resultado['df_rank'].copy()
+            df_rank = df_rank[df_rank['Frecuencia'] > 0]
+            st.dataframe(df_rank, use_container_width=True, hide_index=True)
+            
+            if not resultado['df_historial_actual'].empty:
+                st.subheader("📋 Historial Período Actual")
+                st.markdown(f"**{resultado['estado_periodo']}**")
+                st.dataframe(resultado['df_historial_actual'], use_container_width=True, hide_index=True)
+            
+            if not resultado['df_faltantes'].empty:
+                st.subheader("⏳ Sumas Calientes Faltantes")
+                st.dataframe(resultado['df_faltantes'], use_container_width=True, hide_index=True)
+
+# === TAB 3: ALMANAQUE SUMA CORRIDOS ===
+with tab3:
+    st.header("📅 Almanaque Suma Corridos (Corrido1 + Corrido2)")
+    
+    col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
+    with col_cfg1:
+        dia_ini_c = st.number_input("Día inicio", 1, 31, 1, key="alm_corr_ini")
+    with col_cfg2:
+        dia_fin_c = st.number_input("Día fin", 1, 31, 15, key="alm_corr_fin")
+    with col_cfg3:
+        meses_atras_c = st.number_input("Meses atrás", 1, 24, 6, key="alm_corr_meses")
+    
+    if st.button("Generar Almanaque Suma Corridos", key="btn_alm_corr"):
+        with st.spinner("Generando almanaque..."):
+            resultado = generar_almanaque_sumas(df, 'Suma_Corridos', dia_ini_c, dia_fin_c, meses_atras_c,
+                                                tipo_sesion if tipo_sesion != 'Todas' else None)
+        
+        if not resultado['success']:
+            st.warning(resultado.get('mensaje', 'Sin datos'))
+        else:
+            st.info(f"📅 Períodos analizados: {', '.join(resultado['nombres_bloques'])}")
+            
+            if resultado['sumas_persistentes']:
+                st.success(f"🔥 **Sumas Persistentes:** {resultado['sumas_persistentes']}")
+            else:
+                st.info("No hay sumas persistentes en todos los bloques")
+            
+            st.subheader("📊 Ranking de Sumas")
+            df_rank = resultado['df_rank'].copy()
+            df_rank = df_rank[df_rank['Frecuencia'] > 0]
+            st.dataframe(df_rank, use_container_width=True, hide_index=True)
+            
+            if not resultado['df_historial_actual'].empty:
+                st.subheader("📋 Historial Período Actual")
+                st.markdown(f"**{resultado['estado_periodo']}**")
+                st.dataframe(resultado['df_historial_actual'], use_container_width=True, hide_index=True)
+
+# === TAB 4: ALMANAQUE SUMA FIJO ===
+with tab4:
+    st.header("📅 Almanaque Suma Fijo")
+    
+    col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
+    with col_cfg1:
+        dia_ini_f = st.number_input("Día inicio", 1, 31, 1, key="alm_fijo_ini")
+    with col_cfg2:
+        dia_fin_f = st.number_input("Día fin", 1, 31, 15, key="alm_fijo_fin")
+    with col_cfg3:
+        meses_atras_f = st.number_input("Meses atrás", 1, 24, 6, key="alm_fijo_meses")
+    
+    if st.button("Generar Almanaque Suma Fijo", key="btn_alm_fijo"):
+        with st.spinner("Generando almanaque..."):
+            resultado = generar_almanaque_sumas(df, 'Suma_Fijo', dia_ini_f, dia_fin_f, meses_atras_f,
+                                                tipo_sesion if tipo_sesion != 'Todas' else None)
+        
+        if not resultado['success']:
+            st.warning(resultado.get('mensaje', 'Sin datos'))
+        else:
+            st.info(f"📅 Períodos analizados: {', '.join(resultado['nombres_bloques'])}")
+            
+            if resultado['sumas_persistentes']:
+                st.success(f"🔥 **Sumas Persistentes:** {resultado['sumas_persistentes']}")
+            else:
+                st.info("No hay sumas persistentes en todos los bloques")
+            
+            st.subheader("📊 Ranking de Sumas")
+            df_rank = resultado['df_rank'].copy()
+            st.dataframe(df_rank, use_container_width=True, hide_index=True)
+            
+            if not resultado['df_historial_actual'].empty:
+                st.subheader("📋 Historial Período Actual")
+                st.markdown(f"**{resultado['estado_periodo']}**")
+                st.dataframe(resultado['df_historial_actual'], use_container_width=True, hide_index=True)
+
+# === TAB 5: BUSCAR SUMA ===
+with tab5:
+    st.header("🔍 Buscar Suma Específica")
+    
+    col_tipo, col_valor = st.columns(2)
+    with col_tipo:
+        tipo_busqueda = st.selectbox("Tipo de suma", ['Suma_Fijo', 'Suma_Total', 'Suma_Corridos'],
+                                     format_func=lambda x: {'Suma_Fijo': 'Suma Fijo (0-18)', 
+                                                           'Suma_Total': 'Suma Total (0-54)',
+                                                           'Suma_Corridos': 'Suma Corridos (0-36)'}[x])
+    with col_valor:
+        if tipo_busqueda == 'Suma_Fijo':
+            suma_val = st.number_input("Valor de suma", 0, 18, 9)
+        elif tipo_busqueda == 'Suma_Total':
+            suma_val = st.number_input("Valor de suma", 0, 54, 27)
+        else:
+            suma_val = st.number_input("Valor de suma", 0, 36, 18)
+    
+    if st.button("Buscar Suma", key="btn_buscar"):
+        if tipo_busqueda == 'Suma_Fijo':
+            st.subheader(f"🔢 Números que suman {suma_val} (para Fijo)")
+            nums = obtener_numeros_que_suman(suma_val)
+            st.markdown(f"**Números:** {', '.join(nums)}")
+        
+        df_resultado = buscar_suma_detalle(df, tipo_busqueda, suma_val,
+                                           tipo_sesion if tipo_sesion != 'Todas' else None)
+        
+        if df_resultado is None or df_resultado.empty:
+            st.warning(f"No se encontraron resultados para suma = {suma_val}")
+        else:
+            st.subheader(f"📋 Historial de Suma {suma_val}")
+            st.info(f"Total de apariciones: {len(df_resultado)}")
+            st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+            
+            st.subheader("🔢 Composición de la Suma")
+            st.markdown(f"""
+            **Para esta búsqueda de Suma = {suma_val}:**
+            
+            | Columna | Rango | Descripción |
+            |---------|-------|-------------|
+            | Suma Fijo | 0-18 | Suma de dígitos del Fijo |
+            | Suma Total | 0-54 | Suma_Fijo + Suma_Corr1 + Suma_Corr2 |
+            | Suma Corridos | 0-36 | Suma_Corr1 + Suma_Corr2 |
+            
+            **Números de 2 dígitos que suman {suma_val}:** {', '.join(obtener_numeros_que_suman(suma_val))}
+            """)
+
+# === TAB 6: PRONÓSTICO ===
+with tab6:
+    st.header("🎯 Pronóstico de Sumas")
+    st.markdown("""
+    **Lógica de pronóstico para Geotodo:**
+    - Analiza patrones de Tarde + Noche para predecir Mañana siguiente
+    - Identifica sumas más frecuentes por sesión
+    """)
+    
+    if st.button("Generar Pronóstico", key="btn_pronostico"):
+        with st.spinner("Analizando patrones..."):
+            pronostico = analizar_pronostico(df)
+        
+        if pronostico is None:
+            st.warning("No hay suficientes datos para generar pronóstico")
+        else:
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.subheader("📊 Sumas Más Frecuentes")
+                st.dataframe(pronostico['sumas_frecuentes'].to_frame('Frecuencia'), use_container_width=True)
+            
+            with col2:
+                st.subheader("🌙 Sumas Noche")
+                if not pronostico['sumas_noche'].empty:
+                    st.dataframe(pronostico['sumas_noche'].to_frame('Frecuencia'), use_container_width=True)
+                else:
+                    st.info("Sin datos de Noche")
+            
+            with col3:
+                st.subheader("🌅 Sumas Mañana")
+                if not pronostico['sumas_manana'].empty:
+                    st.dataframe(pronostico['sumas_manana'].to_frame('Frecuencia'), use_container_width=True)
+                else:
+                    st.info("Sin datos de Mañana")
+
+# === INFO ADICIONAL ===
+st.sidebar.markdown("---")
+st.sidebar.markdown("### ℹ️ Información")
+st.sidebar.markdown(f"**Datos cargados:** {len(df)} registros")
+if not df.empty:
+    st.sidebar.markdown(f"**Desde:** {df['Fecha'].min().strftime('%d/%m/%Y')}")
+    st.sidebar.markdown(f"**Hasta:** {df['Fecha'].max().strftime('%d/%m/%Y')}")
+st.sidebar.markdown("---")
+st.sidebar.markdown("*SumaDigitos v2.0 - Corregido*")
