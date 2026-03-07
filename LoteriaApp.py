@@ -3,7 +3,7 @@
 LoteriaApp - Aplicación Principal de Análisis de Lotería
 ========================================================
 Menú principal que permite acceder a los diferentes módulos de análisis:
-- PaleGeo: Análisis de Pales para Geotodo (Mañana, Tarde, Noche)
+- PaleGeo: Análisis de Pales para Geotodo- (Mañana, Tarde, Noche)
 - PaleFlo: Análisis de Pales para Sorteos (Tarde, Noche)
 - SumaDigitos: Análisis de Sumas para Geotodo (Mañana, Tarde, Noche)
 - SumaFlo: Análisis de Sumas para Sorteos (Tarde, Noche)
@@ -176,4 +176,5 @@ st.sidebar.markdown("""
 - Todas son 0-18
 """)
 st.sidebar.markdown("---")
+
 st.sidebar.markdown("*LoteriaApp v4.0*")
