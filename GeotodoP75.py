@@ -415,7 +415,8 @@ def ottenere_faltanti_mese_precedente(df_fijos):
         mancanti = list(set(range(100)) - usciti)
         return mancanti
     except:
-        return []def calcular_estado_actual(gap, limite_dinamico):
+        return []
+def calcular_estado_actual(gap, limite_dinamico):
     if pd.isna(limite_dinamico) or limite_dinamico == 0 or limite_dinamico is None:
         return "Normal"
     if gap > limite_dinamico:
