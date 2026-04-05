@@ -1106,7 +1106,7 @@ def main():
     # Sidebar: Agregar Sorteo
     with st.sidebar.expander("📝 Agregar", True):
         f_n = st.date_input("Fecha", datetime.now().date())
-        ses = st.radio("Sesión", ["Mañana", "Tarde", "Noche"], h=True)
+        ses = st.radio("Sesión", ["Mañana", "Tarde", "Noche"], horizontal=True)
         c = st.number_input("Cen", 0, 999, 0)
         f = st.number_input("Fijo", 0, 99, 0)
         c1 = st.number_input("C1", 0, 99, 0)
