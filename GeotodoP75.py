@@ -901,7 +901,7 @@ def analizar_estadisticas_perfiles(df_historial_perfiles, fecha_referencia, dist
         })
     
     df_stats = pd.DataFrame(analisis_perfiles)
-    return df_stats, transizioni, ultimo_perfil_global
+    return df_stats, transiciones, ultimo_perfil_global
 
 # ============================================================================
 # TOP40 CON FALTANTES DEL MES ANTERIOR (+50 PTS BONUS)
