@@ -1231,6 +1231,101 @@ def generar_sugerencia_fusionada(df_stats, transizioni, ultimo_perfil, df_oport_
             <div style="font-size:0.8em; color:{get_state_color_hex(str(eu))};">{shorten_state(str(eu))}</div>
             </div>
             """, unsafe_allow_html=True)
+def comparar_alertas_general_vs_sesion(df_full, fecha_ref, target_sesion, ruta_cache):
+    st.subheader("⚖️ Comparador de Alertas: General vs Sesión")
+    st.markdown("Busca coincidencias y oportunidades ocultas que solo aparecen en la sesión.")
+    
+    # 1. ANALISIS GENERAL
+    df_backtest_gen = df_full[df_full['Fecha'] < fecha_ref].copy()
+    df_oport_dec_gen, df_oport_uni_gen, _, _, _, _ = analizar_oportunidad_por_digito(df_backtest_gen, fecha_ref)
+    df_hist_perf_gen = obtener_historial_perfiles_cacheado(df_backtest_gen, ruta_cache)
+    df_stats_gen, _, _ = analizar_estadisticas_perfiles(df_hist_perf_gen, fecha_ref, session_filter="General")
+    
+    # Extraer números de alertas General
+    alertas_gen = df_stats_gen[df_stats_gen['Alerta'] == '⚠️ RECUPERAR'].copy()
+    map_dec_gen = df_oport_dec_gen.set_index('Dígito')['Estado'].to_dict()
+    map_uni_gen = df_oport_uni_gen.set_index('Dígito')['Estado'].to_dict()
+    
+    nums_gen = set()
+    if not alertas_gen.empty:
+        for _, r in alertas_gen.iterrows():
+            partes = r['Perfil'].split('-')
+            if len(partes)==2:
+                decs = [d for d in range(10) if map_dec_gen.get(d) == partes[0]]
+                unis = [u for u in range(10) if map_uni_gen.get(u) == partes[1]]
+                for d in decs:
+                    for u in unis: nums_gen.add(int(f"{d}{u}"))
+
+    # 2. ANALISIS SESION
+    # Filtrar datos según sesión
+    orden_sesiones = {'Mañana': 0, 'Tarde': 1, 'Noche': 2}
+    target_val = orden_sesiones[target_sesion]
+    
+    if target_val == 0: 
+        df_backtest_ses = df_full[df_full['Fecha'] < fecha_ref].copy()
+    else: 
+        df_backtest_ses = df_full[(df_full['Fecha'] < fecha_ref) | ((df_full['Fecha'] == fecha_ref) & (df_full['Tipo_Sorteo'].isin(['M', 'T'][:target_val])))].copy()
+        
+    df_oport_dec_ses, df_oport_uni_ses, _, _, _, _ = analizar_oportunidad_por_digito(df_backtest_ses, fecha_ref)
+    df_hist_perf_ses = obtener_historial_perfiles_cacheado(df_backtest_ses, ruta_cache)
+    df_stats_ses, _, _ = analizar_estadisticas_perfiles(df_hist_perf_ses, fecha_ref, session_filter=target_sesion)
+    
+    # Extraer números de alertas Sesión
+    alertas_ses = df_stats_ses[df_stats_ses['Alerta'] == '⚠️ RECUPERAR'].copy()
+    map_dec_ses = df_oport_dec_ses.set_index('Dígito')['Estado'].to_dict()
+    map_uni_ses = df_oport_uni_ses.set_index('Dígito')['Estado'].to_dict()
+    
+    nums_ses = set()
+    if not alertas_ses.empty:
+        for _, r in alertas_ses.iterrows():
+            partes = r['Perfil'].split('-')
+            if len(partes)==2:
+                decs = [d for d in range(10) if map_dec_ses.get(d) == partes[0]]
+                unis = [u for u in range(10) if map_uni_ses.get(u) == partes[1]]
+                for d in decs:
+                    for u in unis: nums_ses.add(int(f"{d}{u}"))
+
+    # 3. COMPARAR Y MOSTRAR
+    total_nums = nums_gen.union(nums_ses)
+    
+    if not total_nums:
+        st.info("No hay alertas activas en General ni en la Sesión.")
+        return
+
+    resultados = []
+    for num in sorted(list(total_nums)):
+        in_gen = num in nums_gen
+        in_ses = num in nums_ses
+        
+        if in_gen and in_ses: tipo = "🔥 COINCIDENCIA"
+        elif in_ses: tipo = "👀 OPORTUNIDAD OCULTA (Sesión)"
+        else: tipo = "📊 SOLO GENERAL"
+        
+        resultados.append({
+            'Número': f"{num:02d}",
+            'Tipo': tipo,
+            'En General': "✅" if in_gen else "",
+            'En Sesión': "✅" if in_ses else ""
+        })
+    
+    df_res = pd.DataFrame(resultados)
+    
+    # Resaltar coincidencias
+    def highlight_coicidence(row):
+        if 'COINCIDENCIA' in row['Tipo']:
+            return ['background-color: #FFD700; color: black'] * len(row)
+        elif 'OCULTA' in row['Tipo']:
+            return ['background-color: #ADD8E6; color: black'] * len(row)
+        return [''] * len(row)
+
+    st.dataframe(df_res.style.apply(highlight_coicidence, axis=1), hide_index=True, use_container_width=True)
+    
+    st.markdown("""
+    **Leyenda:**
+    * 🔥 **COINCIDENCIA:** Sale en General y Sesión (Muy fuerte).
+    * 👀 **OPORTUNIDAD OCULTA:** Sale solo en la Sesión (Posible joya como el 58).
+    * 📊 **SOLO GENERAL:** Sale en General pero la sesión lo ignora (Menos probable en esta sesión).
+    """)
         except:
             continue
     
@@ -2003,6 +2098,12 @@ def main():
                         
                         with st.expander("📋 Ver resultados"):
                             st.dataframe(df_res, hide_index=True)
+    # --- COMPARADOR DE ALERTAS ---
+    st.markdown("---")
+    st.header("⚖️ Comparador de Alertas")
+    if st.button("🔍 Comparar Alertas General vs Sesión"):
+        with st.spinner("Analizando General y Sesión simultáneamente..."):
+            comparar_alertas_general_vs_sesion(df_full, fecha_ref, target_sesion, RUTA_CACHE)
 
 if __name__ == "__main__":
     main()
