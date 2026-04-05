@@ -755,7 +755,12 @@ def calcular_p75_perfil(df_historial_perfiles, perfil_objetivo):
     gaps = fechas.diff().dt.days.dropna()
     return int(np.percentile(gaps, 75)) if len(gaps) >= 4 else int(gaps.median() * 2) if len(gaps) > 0 else 0
 
-def analizar_estadisticas_perfiles(df_historial_perfiles, fecha_referencia, distribuciones_cache=None):
+def analizar_estadisticas_perfiles(df_historial_perfiles, fecha_referencia, distribuciones_cache=None, session_filter=None):
+    # --- CORRECCIÓN: FILTRADO POR SESIÓN ---
+    # Si se especifica una sesión (Mañana, Tarde, Noche), filtramos el dataframe.
+    if session_filter and session_filter != "General":
+        df_historial_perfiles = df_historial_perfiles[df_historial_perfiles['Sorteo'] == session_filter].copy()
+    
     if df_historial_perfiles.empty:
         return pd.DataFrame(), Counter(), None
     
@@ -896,7 +901,7 @@ def analizar_estadisticas_perfiles(df_historial_perfiles, fecha_referencia, dist
         })
     
     df_stats = pd.DataFrame(analisis_perfiles)
-    return df_stats, transiciones, ultimo_perfil_global
+    return df_stats, transizioni, ultimo_perfil_global
 
 # ============================================================================
 # TOP40 CON FALTANTES DEL MES ANTERIOR (+50 PTS BONUS)
