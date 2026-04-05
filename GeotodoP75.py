@@ -754,6 +754,212 @@ def calcular_p75_perfil(df_historial_perfiles, perfil_objetivo):
     gaps = fechas.diff().dt.days.dropna()
     return int(np.percentile(gaps, 75)) if len(gaps) >= 4 else int(gaps.median() * 2) if len(gaps) > 0 else 0
 
+# ============================================================================
+# FUNCIONES INTERMEDIAS (Para corregir el error)
+# ============================================================================
+def obtener_faltantes_mes_anterior(df_fijos):
+    try:
+        mes_anterior, anio_anterior = obtener_mes_anterior_completo(df_fijos)
+        if mes_anterior is None: return []
+        df_fijos_only = df_fijos[df_fijos['Posicion'] == 'Fijo'].copy()
+        fecha_inicio_mes = datetime(anio_anterior, mes_anterior, 1)
+        last_day = calendar.monthrange(anio_anterior, mes_anterior)[1]
+        fecha_fin_mes = datetime(anio_anterior, mes_anterior, last_day)
+        df_mes = df_fijos_only[(df_fijos_only['Fecha'] >= fecha_inicio_mes) & (df_fijos_only['Fecha'] <= fecha_fin_mes)]
+        if df_mes.empty: return []
+        salidos = set(df_mes['Numero'].unique())
+        faltantes = list(set(range(100)) - salidos)
+        return faltantes
+    except: return []
+
+def calcular_estado_actual(gap, limite_dinamico):
+    if pd.isna(limite_dinamico) or limite_dinamico == 0 or limite_dinamico is None: return "Normal"
+    if gap > limite_dinamico: return "Muy Vencido"
+    elif gap > (limite_dinamico * 0.66): return "Vencido"
+    else: return "Normal"
+
+def obtener_df_temperatura(contador):
+    if not contador: return pd.DataFrame({'Dígito': range(10), 'Frecuencia': 0, 'Temperatura': '🟡 Tibio'})
+    df = pd.DataFrame.from_dict(contador, orient='index', columns=['Frecuencia'])
+    df = df.reset_index().rename(columns={'index': 'Dígito'})
+    df = df.sort_values('Frecuencia', ascending=False).reset_index(drop=True)
+    todos_digitos = pd.DataFrame({'Dígito': range(10)})
+    df = todos_digitos.merge(df, on='Dígito', how='left').fillna({'Frecuencia': 0})
+    df['Temperatura'] = '🟡 Tibio'
+    if len(df) >= 3: df.loc[0:2, 'Temperatura'] = '🔥 Caliente'
+    if len(df) >= 7: df.loc[6:9, 'Temperatura'] = '🧊 Frío'
+    return df
+
+def analizar_oportunidad_por_digito(df_historial, fecha_referencia):
+    if df_historial.empty: return pd.DataFrame(), pd.DataFrame(), {}, {}, {}, {}
+    df_base_fijos = df_historial[df_historial['Posicion'] == 'Fijo'].copy()
+    contador_decenas = Counter()
+    contador_unidades = Counter()
+    for num in df_base_fijos['Numero']:
+        contador_decenas[num // 10] += 1
+        contador_unidades[num % 10] += 1
+    df_temp_dec = obtener_df_temperatura(contador_decenas)
+    df_temp_uni = obtener_df_temperatura(contador_unidades)
+    mapa_temp_dec = pd.Series(df_temp_dec.Temperatura.values, index=df_temp_dec.Dígito).to_dict()
+    mapa_temp_uni = pd.Series(df_temp_uni.Temperatura.values, index=df_temp_uni.Dígito).to_dict()
+    df_hist_estado = df_base_fijos[df_base_fijos['Fecha'] <= fecha_referencia].copy()
+    res_dec, res_uni = [], []
+    gaps_dec, gaps_uni, freq_dec, freq_uni = {}, {}, {}, {}
+    for i in range(10):
+        fechas_d = df_hist_estado[df_hist_estado['Numero'] // 10 == i]['Fecha'].sort_values()
+        gap_d, prom_d = 0, 0
+        if not fechas_d.empty:
+            gaps = fechas_d.diff().dt.days.dropna()
+            prom_d = gaps.median() if len(gaps) > 0 else 0
+            gap_d = (fecha_referencia - fechas_d.max()).days
+            gaps_dec[i] = gap_d
+        else: gaps_dec[i] = 999
+        ed = calcular_estado_actual(gap_d, prom_d)
+        
+        fechas_u = df_hist_estado[df_hist_estado['Numero'] % 10 == i]['Fecha'].sort_values()
+        gap_u, prom_u = 0, 0
+        if not fechas_u.empty:
+            gaps = fechas_u.diff().dt.days.dropna()
+            prom_u = gaps.median() if len(gaps) > 0 else 0
+            gap_u = (fecha_referencia - fechas_u.max()).days
+            gaps_uni[i] = gap_u
+        else: gaps_uni[i] = 999
+        eu = calcular_estado_actual(gap_u, prom_u)
+        freq_dec[i] = contador_decenas.get(i, 0)
+        freq_uni[i] = contador_unidades.get(i, 0)
+        
+        res_dec.append({'Dígito': i, 'Temperatura': mapa_temp_dec.get(i, '🟡 Tibio'), 'Estado': ed, 'Punt. Base': {'Muy Vencido':100,'Vencido':50,'Normal':0}.get(ed,0)})
+        res_uni.append({'Dígito': i, 'Temperatura': mapa_temp_uni.get(i, '🟡 Tibio'), 'Estado': eu, 'Punt. Base': {'Muy Vencido':100,'Vencido':50,'Normal':0}.get(eu,0)})
+    return pd.DataFrame(res_dec), pd.DataFrame(res_uni), gaps_dec, gaps_uni, freq_dec, freq_uni
+def obtener_historial_perfiles_cacheado(df_full, ruta_cache=None):
+    if df_full.empty: return pd.DataFrame()
+    df_fijos = df_full[df_full['Posicion'] == 'Fijo'].copy()
+    if df_fijos.empty: return pd.DataFrame()
+    if len(df_fijos) > 1000: df_fijos = df_fijos.tail(1000).reset_index(drop=True)
+    
+    sort_val_map = {'M': 0, 'T': 1, 'N': 2}
+    df_fijos['sort_val'] = df_fijos['Tipo_Sorteo'].map(sort_val_map)
+    df_fijos = df_fijos.sort_values(by=['Fecha', 'sort_val']).reset_index(drop=True)
+    df_fijos.drop(columns=['sort_val'], inplace=True, errors='ignore')
+    df_fijos['ID_Sorteo'] = df_fijos['Fecha'].dt.strftime('%Y-%m-%d') + "_" + df_fijos['Tipo_Sorteo']
+    df_fijos = df_fijos.drop_duplicates(subset=['ID_Sorteo'], keep='last').reset_index(drop=True)
+    
+    df_cache = pd.DataFrame()
+    use_file = ruta_cache and os.path.exists(ruta_cache)
+    if use_file:
+        try: df_cache = pd.read_csv(ruta_cache, parse_dates=['Fecha'], encoding='latin-1')
+        except: df_cache = pd.DataFrame()
+    
+    ids_en_cache = set()
+    if not df_cache.empty and 'Fecha' in df_cache.columns and 'Sorteo' in df_cache.columns:
+        sorteo_map_inv = {'Mañana': 'M', 'Tarde': 'T', 'Noche': 'N', 'M': 'M', 'T': 'T', 'N': 'N'}
+        df_cache['ID_Sorteo'] = df_cache['Fecha'].astype(str).str[:10] + "_" + df_cache['Sorteo'].astype(str).map(sorteo_map_inv)
+        ids_en_cache = set(df_cache['ID_Sorteo'].dropna())
+    
+    df_nuevos = df_fijos[~df_fijos['ID_Sorteo'].isin(ids_en_cache)].copy()
+    if df_nuevos.empty:
+        cols_to_drop = [c for c in ['ID_Sorteo'] if c in df_cache.columns]
+        if cols_to_drop: df_cache = df_cache.drop(columns=cols_to_drop)
+        return df_cache
+    
+    df_nuevos = df_nuevos.sort_values(by=['Fecha', 'Tipo_Sorteo'])
+    hist_decenas = defaultdict(list)
+    hist_unidades = defaultdict(list)
+    if not df_cache.empty and 'Fecha' in df_cache.columns:
+        sort_val_inv = {'Mañana': 0, 'Tarde': 1, 'Noche': 2, 'M': 0, 'T': 1, 'N': 2}
+        df_cache['sort_val'] = df_cache['Sorteo'].astype(str).map(sort_val_inv).fillna(0)
+        df_cache_sorted = df_cache.sort_values(by=['Fecha', 'sort_val'])
+        for _, row in df_cache_sorted.iterrows():
+            try:
+                num = int(row['Numero']); fecha = pd.to_datetime(row['Fecha'])
+                hist_decenas[num // 10].append(fecha); hist_unidades[num % 10].append(fecha)
+            except: continue
+    
+    nuevos_registros = []
+    for idx, row in df_nuevos.iterrows():
+        try:
+            fecha_actual = pd.to_datetime(row['Fecha']); num_actual = int(row['Numero']); tipo_actual = str(row['Tipo_Sorteo']).upper()
+            dec = num_actual // 10; uni = num_actual % 10
+            # Lógica simplificada de estado para cache
+            perfil = "Normal-Normal" 
+            nombre_sorteo = {'M': 'Mañana', 'T': 'Tarde', 'N': 'Noche'}.get(tipo_actual, 'Otro')
+            nuevos_registros.append({'Fecha': fecha_actual, 'Sorteo': nombre_sorteo, 'Numero': num_actual, 'Perfil': perfil})
+            hist_decenas[dec].append(fecha_actual); hist_unidades[uni].append(fecha_actual)
+        except: continue
+    
+    if nuevos_registros:
+        df_nuevos_cache = pd.DataFrame(nuevos_registros)
+        if not df_cache.empty:
+            cols_to_drop = [c for c in ['ID_Sorteo', 'sort_val'] if c in df_cache.columns]
+            df_final = pd.concat([df_cache.drop(columns=cols_to_drop, errors='ignore'), df_nuevos_cache], ignore_index=True)
+        else: df_final = df_nuevos_cache
+        if ruta_cache:
+            try: df_final.to_csv(ruta_cache, index=False, encoding='latin-1')
+            except: pass
+        return df_final
+    else:
+        cols_to_drop = [c for c in ['ID_Sorteo'] if c in df_cache.columns]
+        if cols_to_drop: df_cache = df_cache.drop(columns=cols_to_drop)
+        return df_cache
+
+def calcular_estabilidad_historica_digitos(df_full):
+    if df_full.empty: return pd.DataFrame()
+    df_fijos = df_full[df_full['Posicion'] == 'Fijo'].copy()
+    if len(df_fijos) > 1000: df_fijos = df_fijos.tail(1000)
+    resultados = []
+    for i in range(10):
+        fechas_d = df_fijos[df_fijos['Numero'] // 10 == i]['Fecha'].sort_values()
+        if len(fechas_d) > 1:
+            gaps = fechas_d.diff().dt.days.dropna()
+            if len(gaps) > 0: med = gaps.median(); excesos = sum(g > (med * 1.5) for g in gaps); estabilidad = 100 - (excesos / len(gaps) * 100)
+            else: estabilidad = 50
+        else: estabilidad = 50
+        resultados.append({'Digito': i, 'Tipo': 'Decena', 'EstabilidadHist': round(estabilidad, 1)})
+        fechas_u = df_fijos[df_fijos['Numero'] % 10 == i]['Fecha'].sort_values()
+        if len(fechas_u) > 1:
+            gaps = fechas_u.diff().dt.days.dropna()
+            if len(gaps) > 0: med = gaps.median(); excesos = sum(g > (med * 1.5) for g in gaps); estabilidad = 100 - (excesos / len(gaps) * 100)
+            else: estabilidad = 50
+        else: estabilidad = 50
+        resultados.append({'Digito': i, 'Tipo': 'Unidad', 'EstabilidadHist': round(estabilidad, 1)})
+    return pd.DataFrame(resultados)
+
+def pre_calcular_distribuciones_perfiles(df_historial_perfiles):
+    if df_historial_perfiles.empty: return {}
+    distribuciones = {}
+    perfiles_unicos = df_historial_perfiles['Perfil'].unique()
+    for perfil in perfiles_unicos:
+        df_perfil = df_historial_perfiles[df_historial_perfiles['Perfil'] == perfil].copy()
+        if df_perfil.empty: distribuciones[perfil] = {'Normal': 33.3, 'Vencido': 33.3, 'Muy Vencido': 33.3, 'Estado_Comun': 'Normal', 'porcentaje': 33.3}; continue
+        estados_calculados = []
+        fechas = df_perfil['Fecha'].sort_values().tolist()
+        for i, fecha_actual in enumerate(fechas):
+            if i == 0: estados_calculados.append('Normal'); continue
+            fechas_previas = fechas[:i]; gaps = []
+            for j in range(1, len(fechas_previas)):
+                gap = (fechas_previas[j] - fechas_previas[j-1]).days
+                if gap >= 0: gaps.append(gap)
+            if len(gaps) == 0: estados_calculados.append('Normal'); continue
+            if len(gaps) >= 4: limite_dinamico = int(np.percentile(gaps, 75))
+            else: limite_dinamico = int(np.median(gaps) * 2)
+            gap_actual = (fecha_actual - fechas_previas[-1]).days
+            estado = calcular_estado_actual(gap_actual, limite_dinamico)
+            estados_calculados.append(estado)
+        if len(estados_calculados) > 0:
+            contador = Counter(estados_calculados); total = len(estados_calculados)
+            distribucion = {estado: (count / total * 100) for estado, count in contador.items()}
+            estado_comun = max(distribucion.keys(), key=lambda k: distribucion[k])
+            if distribucion[estado_comun] < 60: estado_comun = 'Ninguno'
+            distribuciones[perfil] = {'Normal': distribucion.get('Normal', 0), 'Vencido': distribucion.get('Vencido', 0), 'Muy Vencido': distribucion.get('Muy Vencido', 0), 'Estado_Comun': estado_comun, 'porcentaje': distribucion.get(estado_comun, 0)}
+        else: distribuciones[perfil] = {'Normal': 33.3, 'Vencido': 33.3, 'Muy Vencido': 33.3, 'Estado_Comun': 'Normal', 'porcentaje': 33.3}
+    return distribuciones
+
+def calcular_p75_perfil(df_historial_perfiles, perfil_objetivo):
+    if df_historial_perfiles.empty: return 0
+    df_perfil = df_historial_perfiles[df_historial_perfiles['Perfil'] == perfil_objetivo].copy()
+    if len(df_perfil) < 2: return 0
+    fechas = df_perfil['Fecha'].sort_values(); gaps = fechas.diff().dt.days.dropna()
+    return int(np.percentile(gaps, 75)) if len(gaps) >= 4 else int(gaps.median() * 2) if len(gaps) > 0 else 0
 def analizar_estadisticas_perfiles(df_historial_perfiles, fecha_referencia, distribuciones_cache=None, session_filter=None):
     if session_filter and session_filter != "General":
         df_historial_perfiles = df_historial_perfiles[df_historial_perfiles['Sorteo'] == session_filter].copy()
