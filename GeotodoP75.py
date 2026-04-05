@@ -1789,7 +1789,7 @@ def main():
             with st.spinner("Analizando..."):
                 if not df_historial_perfiles_full.empty:
                     distribuciones_cache = pre_calcular_distribuciones_perfiles(df_historial_perfiles_full)
-                    df_stats, transizioni, ultimo_perfil = analizar_estadisticas_perfiles(df_historial_perfiles_full, fecha_ref, distribuciones_cache=distribuciones_cache)
+                    df_stats, transizioni, ultimo_perfil = analizar_estadisticas_perfiles(df_historial_perfiles_full, fecha_ref, distribuciones_cache=distribuciones_cache, session_filter=modo_sorteo)
                     estabilidad_digitos = calcular_estabilidad_historica_digitos(df_analisis)
                     
                     faltantes_mes_anterior = obtener_faltantes_mes_anterior(df_analisis)
