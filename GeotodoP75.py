@@ -1844,6 +1844,26 @@ def main():
                             csv_stats = df_display.to_csv(index=False).encode('utf-8')
                             st.download_button(
                                 label="📊 Guardar Estadísticas",
+                # 🎯 SEÑALES DE JUEGO AUTOMÁTICAS (Aparece solo si hay perfiles válidos)
+        if 'df_stats' in locals() and not df_stats.empty:
+            df_senales = df_stats[
+                (df_stats['Alerta'] == '⚠️ RECUPERAR') &
+                (df_stats['Estabilidad'] >= 60) &
+                (df_stats['Estado Actual'].isin(['Vencido', 'Muy Vencido']))
+            ].copy()
+
+            if not df_senales.empty:
+                st.markdown("---")
+                st.subheader("🎯 Señales de Juego (Auto-Detectadas)")
+                st.success(f"🔍 **{len(df_senales)} perfil(es)** cumplen criterios de alta probabilidad.")
+
+                df_senales['Exceso Días'] = (df_senales['Gap Actual'] - df_senales['Tiempo Limite']).astype(int)
+                df_senales['Prioridad'] = df_senales['Exceso Días'].apply(lambda x: "🔴 Crítica" if x > 5 else ("🟠 Alta" if x > 2 else "🟡 Media"))
+
+                cols_senal = ['Perfil', 'Estado Actual', 'Exceso Días', 'Estabilidad', 'Prioridad']
+                st.dataframe(df_senales[cols_senal].sort_values('Exceso Días', ascending=False), hide_index=True, use_container_width=True)
+
+                st.caption("💡 Cruza estos perfiles con la sección *🚨 Detalle de Alertas Activas* para ver los números exactos.")
                                 data=csv_stats,
                                 file_name=f"Stats_{modo_sorteo}_{fecha_ref.strftime('%Y%m%d')}.csv",
                                 mime="text/csv",
