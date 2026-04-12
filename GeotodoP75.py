@@ -1825,26 +1825,55 @@ def main():
                         cols_tabla = ['Perfil', 'Frecuencia', 'Veces Normal', 'Veces Vencido', 'Veces Muy Vencido', 'Estado Actual', 'Estabilidad', 'Tiempo Limite', 'Alerta', 'Estado Ultima Salida', 'Estabilidad Ultima Salida', 'Exceso Ultima Salida']
                         df_display = df_stats[cols_tabla].copy()
                         st.dataframe(df_display.sort_values('Frecuencia', ascending=False), hide_index=True, use_container_width=True)
-                                            # 🎯 SEÑALES DE JUEGO AUTOMÁTICAS
+                                                                # 🎯 SEÑALES DE JUEGO AUTOMÁTICAS (CON CRUCE DE PATRÓN)
                     if 'df_stats' in locals() and not df_stats.empty:
+                        # Obtener distribuciones para cruzar con Estado Común
+                        distribuciones = pre_calcular_distribuciones_perfiles(df_hist_perfiles)
+                        
                         df_senales = df_stats[
                             (df_stats['Alerta'] == '⚠️ RECUPERAR') &
                             (df_stats['Estabilidad'] >= 60) &
                             (df_stats['Estado Actual'].isin(['Vencido', 'Muy Vencido']))
                         ].copy()
-
+                        
                         if not df_senales.empty:
+                            # Agregar columna de Estado Común y validar ≥60%
+                            def get_estado_comun(perfil):
+                                dist = distribuciones.get(perfil, {})
+                                estados = {k: v for k, v in dist.items() if k in ['Normal', 'Vencido', 'Muy Vencido']}
+                                if not estados:
+                                    return 'Ninguno', 0
+                                max_estado = max(estados, key=estados.get)
+                                return max_estado, estados[max_estado]
+                            
+                            df_senales[['Estado_Comun', 'Porc_Comun']] = df_senales['Perfil'].apply(
+                                lambda p: pd.Series(get_estado_comun(p))
+                            )
+                            
+                            # Separar en dos grupos
+                            df_con_patron = df_senales[df_senales['Porc_Comun'] >= 60].copy()
+                            df_sin_patron = df_senales[df_senales['Porc_Comun'] < 60].copy()
+                            
                             st.markdown("---")
-                            st.subheader("🎯 Señales de Juego (Auto-Detectadas)")
-                            st.success(f"🔍 **{len(df_senales)} perfil(es)** cumplen criterios de alta probabilidad.")
-
-                            df_senales['Exceso Días'] = (df_senales['Gap Actual'] - df_senales['Tiempo Limite']).astype(int)
-                            df_senales['Prioridad'] = df_senales['Exceso Días'].apply(lambda x: "🔴 Crítica" if x > 5 else ("🟠 Alta" if x > 2 else "🟡 Media"))
-
-                            cols_senal = ['Perfil', 'Estado Actual', 'Exceso Días', 'Estabilidad', 'Prioridad']
-                            st.dataframe(df_senales[cols_senal].sort_values('Exceso Días', ascending=False), hide_index=True, use_container_width=True)
-
-                            st.caption("💡 Cruza estos perfiles con la sección *🚨 Detalle de Alertas Activas* para ver los números exactos.")
+                            st.subheader("🎯 Señales de Juego (Cruzadas con Patrón)")
+                            
+                            if not df_con_patron.empty:
+                                st.success(f"🔥 **{len(df_con_patron)} perfil(es) con VENTAJA ESTADÍSTICA**")
+                                df_con_patron['Exceso Días'] = (df_con_patron['Gap Actual'] - df_con_patron['Tiempo Limite']).astype(int)
+                                df_con_patron['Prioridad'] = df_con_patron['Exceso Días'].apply(
+                                    lambda x: "🔴 Crítica" if x > 5 else ("🟠 Alta" if x > 2 else "🟡 Media")
+                                )
+                                cols = ['Perfil', 'Estado Actual', 'Estado_Comun', 'Porc_Comun', 'Exceso Días', 'Prioridad']
+                                st.dataframe(df_con_patron[cols].sort_values('Porc_Comun', ascending=False), hide_index=True, use_container_width=True)
+                            
+                            if not df_sin_patron.empty:
+                                st.info(f"🟡 **{len(df_sin_patron)} perfil(es) con timing favorable pero SIN patrón claro**")
+                                st.caption("⚠️ Estos perfiles tienen alta estabilidad pero sin Estado Común ≥60%. Usar solo como respaldo con gestión de riesgo.")
+                                df_sin_patron['Exceso Días'] = (df_sin_patron['Gap Actual'] - df_sin_patron['Tiempo Limite']).astype(int)
+                                cols = ['Perfil', 'Estado Actual', 'Estado_Comun', 'Porc_Comun', 'Exceso Días']
+                                st.dataframe(df_sin_patron[cols], hide_index=True, use_container_width=True)
+                            
+                            st.caption("💡 Cruza los perfiles con patrón ≥60% con la sección *🚨 Detalle de Alertas Activas* para ver los números exactos.")
 
                         # 📱 ICONOS DE EXPORTACIÓN OPTIMIZADOS PARA MÓVIL
                         st.markdown("---")
