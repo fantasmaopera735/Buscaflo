@@ -1451,7 +1451,8 @@ def ejecutar_backtest(df_full, sorteos_objetivo, nombre_sesion, debug_mode=False
         if df_historial_perfiles.empty:
             df_stats, transizioni, ultimo_perfil = pd.DataFrame(), Counter(), None
         else:
-            df_stats, transizioni, ultimo_perfil = analizar_estadisticas_perfiles(df_historial_perfiles, fecha_ref, distribuciones_cache=distribuciones_cache)                    st.session_state['df_stats_guardado'] = df_stats
+            df_stats, transizioni, ultimo_perfil = analizar_estadisticas_perfiles(df_historial_perfiles, fecha_ref, distribuciones_cache=distribuciones_cache)
+                    st.session_state['df_stats_guardado'] = df_stats
                     st.session_state['df_oport_dec_guardado'] = df_oport_dec
                     st.session_state['df_oport_uni_guardado'] = df_oport_uni
                     
