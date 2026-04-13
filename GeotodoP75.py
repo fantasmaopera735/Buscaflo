@@ -1452,10 +1452,6 @@ def ejecutar_backtest(df_full, sorteos_objetivo, nombre_sesion, debug_mode=False
             df_stats, transizioni, ultimo_perfil = pd.DataFrame(), Counter(), None
         else:
             df_stats, transizioni, ultimo_perfil = analizar_estadisticas_perfiles(df_historial_perfiles, fecha_ref, distribuciones_cache=distribuciones_cache)
-                    st.session_state['df_stats_guardado'] = df_stats
-                    st.session_state['df_oport_dec_guardado'] = df_oport_dec
-                    st.session_state['df_oport_uni_guardado'] = df_oport_uni
-                    
         
         faltantes_mes = obtener_faltantes_mes_anterior(df_historial)
         prediccion = obtener_prediccion_numeros_lista(
@@ -1829,88 +1825,56 @@ def main():
                         cols_tabla = ['Perfil', 'Frecuencia', 'Veces Normal', 'Veces Vencido', 'Veces Muy Vencido', 'Estado Actual', 'Estabilidad', 'Tiempo Limite', 'Alerta', 'Estado Ultima Salida', 'Estabilidad Ultima Salida', 'Exceso Ultima Salida']
                         df_display = df_stats[cols_tabla].copy()
                         st.dataframe(df_display.sort_values('Frecuencia', ascending=False), hide_index=True, use_container_width=True)
-                                            # 🎲 ORDENADOR DE NÚMEROS PERSONALIZADO (Con Memoria)
-                    st.markdown("---")
-                    st.subheader("🔢 Ordenador de Números Personalizado")
-                    st.caption("Pega o escribe tus números separados por comas o espacios (ej: 12, 34, 05)")
-                    
-                    # Recuperar datos: intenta de la variable local, si no, de la memoria guardada
-                    df_stats_activo = df_stats if 'df_stats' in locals() else st.session_state.get('df_stats_guardado')
-                    df_oport_dec_activo = df_oport_dec if 'df_oport_dec' in locals() else st.session_state.get('df_oport_dec_guardado')
-                    df_oport_uni_activo = df_oport_uni if 'df_oport_uni' in locals() else st.session_state.get('df_oport_uni_guardado')
-
-                    if df_stats_activo is not None and not df_stats_activo.empty:
-                        numeros_input = st.text_area(
-                            "Ingresa tus números aquí:",
-                            height=80,
-                            placeholder="12, 34, 05, 88, 91...",
-                            key="input_numeros_ordenar"
-                        )
+                                                                                    # 🎯 SEÑALES DE JUEGO AUTOMÁTICAS (CON CRUCE DE PATRÓN + PRIORIDAD VISUAL)
+                    if 'df_stats' in locals() and not df_stats.empty:
+                        # Obtener distribuciones para cruzar con Estado Común
+                        distribuciones = pre_calcular_distribuciones_perfiles(df_hist_perfiles)
                         
-                        if st.button("🔄 Ordenar por Prioridad del Algoritmo", key="btn_ordenar_manual", use_container_width=True):
-                            if numeros_input.strip():
-                                raw_nums = numeros_input.replace(',', ' ').replace(';', ' ').replace('\n', ' ').split()
-                                nums_validos = []
-                                for n in raw_nums:
-                                    n = n.strip()
-                                    if n.isdigit() and 0 <= int(n) <= 99:
-                                        nums_validos.append(int(n))
-                                nums_validos = sorted(list(set(nums_validos)))
-                                
-                                if not nums_validos:
-                                    st.warning("⚠️ No se encontraron números válidos (00-99).")
-                                else:
-                                    distribuciones = pre_calcular_distribuciones_perfiles(df_hist_perfiles)
-                                    map_estado_dec = df_oport_dec_activo.set_index('Dígito')['Estado'].to_dict() if not df_oport_dec_activo.empty else {}
-                                    map_estado_uni = df_oport_uni_activo.set_index('Dígito')['Estado'].to_dict() if not df_oport_uni_activo.empty else {}
-                                    
-                                    def get_estado_comun(perfil):
-                                        dist = distribuciones.get(perfil, {})
-                                        estados = {k: v for k, v in dist.items() if k in ['Normal', 'Vencido', 'Muy Vencido']}
-                                        if not estados: return 'Ninguno', 0
-                                        max_estado = max(estados, key=estados.get)
-                                        return max_estado, estados[max_estado]
-                                    
-                                    perfil_metrics = {}
-                                    for p in df_stats_activo['Perfil'].unique():
-                                        ec, pc = get_estado_comun(p)
-                                        row = df_stats_activo[df_stats_activo['Perfil'] == p].iloc[0]
-                                        perfil_metrics[p] = {
-                                            'Estado_Comun': ec, 'Porc_Comun': pc,
-                                            'Estabilidad': row.get('Estabilidad', 0),
-                                            'Alerta': row.get('Alerta', '-'),
-                                            'Exceso_Dias': 0 
-                                        }
-                                    
-                                    def calcular_score_manual(num):
-                                        dec, uni = num // 10, num % 10
-                                        ed, eu = map_estado_dec.get(dec, 'Normal'), map_estado_uni.get(uni, 'Normal')
-                                        perfil = f"{ed}-{eu}"
-                                        m = perfil_metrics.get(perfil, {'Porc_Comun': 0, 'Estabilidad': 50, 'Alerta': '-'})
-                                        score = 0
-                                        if m['Porc_Comun'] >= 60: score += 100
-                                        elif m['Porc_Comun'] >= 50: score += 70
-                                        else: score += 40
-                                        score += m.get('Estabilidad', 50) * 0.5
-                                        if m['Alerta'] == '⚠️ RECUPERAR': score += 20
-                                        return score, perfil, m['Estado_Comun'], m['Porc_Comun']
-                                    
-                                    resultados = []
-                                    for num in nums_validos:
-                                        score, perfil, ec, pc = calcular_score_manual(num)
-                                        resultados.append({'Número': f"{num:02d}", 'Score': score, 'Perfil': perfil, 'Estado_Común': ec, '% Común': f"{pc:.1f}%"})
-                                    
-                                    resultados.sort(key=lambda x: x['Score'], reverse=True)
-                                    st.success(f"✅ Se ordenaron **{len(resultados)} números** según la prioridad del algoritmo.")
-                                    st.dataframe(pd.DataFrame(resultados), hide_index=True, use_container_width=True)
-                                    
-                                    if len(resultados) > 0:
-                                        top_recom = pd.DataFrame(resultados).head(2)['Número'].tolist()
-                                        st.info(f"🎯 **Recomendación para jugar:** {', '.join(top_recom)}")
-                            else:
-                                st.warning("⚠️ Ingresa al menos un número para ordenar.")
-                    else:
-                        st.info("ℹ️ Ejecuta el análisis primero para activar el ordenador de números.")
+                        df_senales = df_stats[
+                            (df_stats['Alerta'] == '⚠️ RECUPERAR') &
+                            (df_stats['Estabilidad'] >= 60) &
+                            (df_stats['Estado Actual'].isin(['Vencido', 'Muy Vencido']))
+                        ].copy()
+                        
+                        if not df_senales.empty:
+                            # Agregar columna de Estado Común y validar ≥60%
+                            def get_estado_comun(perfil):
+                                dist = distribuciones.get(perfil, {})
+                                estados = {k: v for k, v in dist.items() if k in ['Normal', 'Vencido', 'Muy Vencido']}
+                                if not estados:
+                                    return 'Ninguno', 0
+                                max_estado = max(estados, key=estados.get)
+                                return max_estado, estados[max_estado]
+                            
+                            df_senales[['Estado_Comun', 'Porc_Comun']] = df_senales['Perfil'].apply(
+                                lambda p: pd.Series(get_estado_comun(p))
+                            )
+                            
+                            # Calcular Exceso Días y Prioridad para TODOS los perfiles
+                            df_senales['Exceso Días'] = (df_senales['Gap Actual'] - df_senales['Tiempo Limite']).astype(int)
+                            df_senales['Prioridad'] = df_senales['Exceso Días'].apply(
+                                lambda x: "🔴 Crítica" if x > 5 else ("🟠 Alta" if x > 2 else "🟡 Media")
+                            )
+                            
+                            # Separar en dos grupos
+                            df_con_patron = df_senales[df_senales['Porc_Comun'] >= 60].copy()
+                            df_sin_patron = df_senales[df_senales['Porc_Comun'] < 60].copy()
+                            
+                            st.markdown("---")
+                            st.subheader("🎯 Señales de Juego (Cruzadas con Patrón)")
+                            
+                            if not df_con_patron.empty:
+                                st.success(f"🔥 **{len(df_con_patron)} perfil(es) con VENTAJA ESTADÍSTICA**")
+                                cols = ['Perfil', 'Estado Actual', 'Estado_Comun', 'Porc_Comun', 'Exceso Días', 'Prioridad']
+                                st.dataframe(df_con_patron[cols].sort_values('Porc_Comun', ascending=False), hide_index=True, use_container_width=True)
+                            
+                            if not df_sin_patron.empty:
+                                st.info(f"🟡 **{len(df_sin_patron)} perfil(es) con timing favorable pero SIN patrón claro**")
+                                st.caption("⚠️ Estos perfiles tienen alta estabilidad pero sin Estado Común ≥60%. Usar solo como respaldo con gestión de riesgo.")
+                                cols = ['Perfil', 'Estado Actual', 'Estado_Comun', 'Porc_Comun', 'Exceso Días', 'Prioridad']
+                                st.dataframe(df_sin_patron[cols], hide_index=True, use_container_width=True)
+                            
+                            st.caption("💡 Cruza los perfiles con patrón ≥60% con la sección *🚨 Detalle de Alertas Activas* para ver los números exactos.")
 
                         # 📱 ICONOS DE EXPORTACIÓN OPTIMIZADOS PARA MÓVIL
                         st.markdown("---")
