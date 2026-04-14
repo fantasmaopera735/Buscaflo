@@ -28,6 +28,8 @@ if 'df_stats_sumas' not in st.session_state:
     st.session_state.df_stats_sumas = None
 if 'distribuciones_sumas' not in st.session_state:
     st.session_state.distribuciones_sumas = None
+if 'df_full_cache' not in st.session_state:
+    st.session_state.df_full_cache = None
 
 # =============================================================================
 # FUNCIONES AUXILIARES
@@ -53,6 +55,9 @@ def parse_fecha_safe(fecha_str):
 
 def obtener_suma(num):
     return (num // 10) + (num % 10)
+
+def obtener_combinaciones_suma(s):
+    return [f"{d}{u}" for d in range(10) for u in range(10) if d + u == s]
 
 def calcular_estado_actual(gap, limite_p75):
     if pd.isna(limite_p75) or limite_p75 == 0: return "Normal"
@@ -112,8 +117,6 @@ def pre_calcular_distribuciones_sumas(df_historial):
         estados_historicos = []
         for i in range(1, len(fechas)):
             gaps_prev = [(fechas[j] - fechas[j-1]).days for j in range(1, i)]
-            
-            # ✅ Manejo seguro para evitar error con listas vacías o cortas
             if not gaps_prev:
                 limite = 0
             elif len(gaps_prev) >= 4:
@@ -207,6 +210,27 @@ def mostrar_tabla_comportamiento(distribuciones):
         })
     st.dataframe(pd.DataFrame(filas), hide_index=True, use_container_width=True)
 
+def mostrar_estadistica_sumas(df_stats):
+    st.markdown("---")
+    st.subheader("📈 Estadística de Sumas (Completa)")
+    if df_stats.empty:
+        st.info("ℹ️ Sin datos estadísticos.")
+        return
+    cols = ['Suma', 'Frecuencia', 'Veces Normal', 'Veces Vencido', 'Veces Muy Vencido', 
+            'Estado Actual', 'Estabilidad', 'Tiempo Limite (P75)', 'Alerta', 'Gap Actual', 'Exceso Ultima Salida']
+    st.dataframe(df_stats[cols].sort_values('Frecuencia', ascending=False), hide_index=True, use_container_width=True)
+
+def mostrar_historial_sumas(df_fijos):
+    st.markdown("---")
+    st.subheader("📜 Historial de Salidas de Sumas (Reciente a Antiguo)")
+    if df_fijos.empty:
+        st.info("ℹ️ Sin historial.")
+        return
+    df_hist = df_fijos[['Fecha', 'Tipo_Sorteo', 'Fijo', 'Suma']].copy()
+    df_hist = df_hist.sort_values('Fecha', ascending=False).reset_index(drop=True)
+    df_hist['Tipo_Sorteo'] = df_hist['Tipo_Sorteo'].map({'T': 'Tarde', 'N': 'Noche'})
+    st.dataframe(df_hist.head(30), hide_index=True, use_container_width=True)
+
 def mostrar_señales_juego(df_stats):
     if df_stats.empty: return
     df_senales = df_stats[
@@ -246,11 +270,10 @@ def mostrar_alertas_detalladas(df_stats, distribuciones):
         gap = row['Gap Actual']
         limite = row['Tiempo Limite (P75)']
         estado = row['Estado Actual']
-        med = row['Estabilidad'] # Aproximación visual para la UI
         
         time_str = ""
         if estado == "Normal":
-            falta = int(med - gap) if med > gap else 0
+            falta = int(limite - gap) if limite > gap else 0
             time_str = f"🟢 Faltan ~{falta} días para Vencido"
         elif estado == "Vencido":
             falta_mv = int(limite - gap) if limite > gap else 0
@@ -262,6 +285,7 @@ def mostrar_alertas_detalladas(df_stats, distribuciones):
             
         dist = distribuciones.get(s, {})
         dist_str = " | ".join([f"{k}: {v:.1f}%" for k, v in dist.items() if k in ['Normal', 'Vencido', 'Muy Vencido']])
+        combinaciones = obtener_combinaciones_suma(s)
         
         with st.container(border=True):
             st.markdown(f"**🔢 Suma `{s:02d}` | Estado: `{estado}` | ⏳ {time_str}**")
@@ -269,10 +293,18 @@ def mostrar_alertas_detalladas(df_stats, distribuciones):
             st.markdown(f"📊 **Datos:** Gap Actual: **{gap} días** | Límite P75: **{limite} días**")
             st.markdown(f"📈 **Distribución Histórica:** {dist_str}")
             
+            st.markdown(f"🔗 **Combinaciones de la Suma {s}:** `{' | '.join(combinaciones)}`")
+            
             if row['Estado_Comun'] != 'Ninguno':
                 st.success(f"✅ **Patrón Claro:** Suele salir en estado `{row['Estado_Comun']}` ({row['Porc_Comun']:.1f}% histórico)")
             else:
                 st.warning("⚠️ Sin patrón dominante histórico (<60%)")
+            
+            st.info("🔙 **Historia de la última salida de esta suma:**")
+            st.markdown(f"- Estado en ese momento: **{row['Estado Ultima Salida']}**")
+            st.markdown(f"- Estabilidad previa: **{row['Estabilidad']}%**")
+            if row['Exceso Ultima Salida'] > 0:
+                st.markdown(f"- Días en exceso: **+{row['Exceso Ultima Salida']} días**")
             st.markdown("---")
 
 def mostrar_ultimos_resultados_sidebar(df_full):
@@ -281,22 +313,25 @@ def mostrar_ultimos_resultados_sidebar(df_full):
     if df_full.empty:
         st.sidebar.info("ℹ️ Sin datos")
         return
-    ultimos = df_full.sort_values('Fecha', ascending=False).head(5)
-    for _, row in ultimos.iterrows():
-        num = int(row['Fijo'])
-        suma = obtener_suma(num)
-        fecha = row['Fecha'].strftime('%d/%m') if pd.notna(row['Fecha']) else 'N/A'
-        sesion = row.get('Tipo_Sorteo', 'T')
-        st.sidebar.markdown(f"**📅 {fecha} | {sesion}**")
-        st.sidebar.markdown(f"🔢 `{num:02d}` → ➕ `{suma}`")
-        st.sidebar.markdown("---")
+    
+    # Solo último de Tarde y último de Noche
+    for sesion, nombre in [('T', '☀️ Tarde'), ('N', '🌙 Noche')]:
+        df_sesion = df_full[df_full['Tipo_Sorteo'] == sesion]
+        if not df_sesion.empty:
+            ultimo = df_sesion.sort_values('Fecha', ascending=False).iloc[0]
+            num = int(ultimo['Fijo'])
+            suma = obtener_suma(num)
+            fecha = ultimo['Fecha'].strftime('%d/%m/%Y') if pd.notna(ultimo['Fecha']) else 'N/A'
+            st.sidebar.markdown(f"**{nombre}**")
+            st.sidebar.markdown(f"📅 {fecha}")
+            st.sidebar.markdown(f"🔢 `{num:02d}` → ➕ `{suma}`")
+            st.sidebar.markdown("---")
 
 def ordenador_numeros(df_stats, distribuciones):
     st.markdown("---")
     st.subheader("🔢 Ordenador de Números por Suma")
     st.caption("Ingresa números separados por comas o espacios. La app los ordenará según la presión estadística de su suma.")
     
-    # Recuperar datos de memoria si la UI se reinició
     df_stats_activo = df_stats if 'df_stats' in locals() else st.session_state.get('df_stats_sumas')
     distribuciones_activo = distribuciones if 'distribuciones' in locals() else st.session_state.get('distribuciones_sumas')
     
@@ -361,6 +396,7 @@ def main():
     modo_sesion = st.sidebar.radio("Sesión:", ["General", "Tarde", "Noche"], key="radio_sesion")
     
     df_fijos, df_full = cargar_datos_flotodo(RUTA_CSV)
+    st.session_state.df_full_cache = df_full
     mostrar_ultimos_resultados_sidebar(df_full)
     
     if df_fijos.empty:
@@ -379,21 +415,27 @@ def main():
         with st.spinner("Calculando Gaps, P75 y Estados..."):
             df_stats, distribuciones = analizar_estadisticas_sumas(df_analisis, fecha_ref)
             
-            # 🧠 Guardar en memoria para persistencia
+                        # 🧠 Guardar en memoria para persistencia
             st.session_state.df_stats_sumas = df_stats
             st.session_state.distribuciones_sumas = distribuciones
             
+            # Renderizado en orden lógico
             mostrar_tabla_comportamiento(distribuciones)
-            mostrar_alertas_detalladas(df_stats, distribuciones)
+            mostrar_estadistica_sumas(df_stats)
+            mostrar_historial_sumas(df_fijos)
             mostrar_señales_juego(df_stats)
+            mostrar_alertas_detalladas(df_stats, distribuciones)
             ordenador_numeros(df_stats, distribuciones)
 
     elif st.session_state.df_stats_sumas is not None:
         df_stats = st.session_state.df_stats_sumas
         distribuciones = st.session_state.distribuciones_sumas
+        
         mostrar_tabla_comportamiento(distribuciones)
-        mostrar_alertas_detalladas(df_stats, distribuciones)
+        mostrar_estadistica_sumas(df_stats)
+        mostrar_historial_sumas(df_fijos)
         mostrar_señales_juego(df_stats)
+        mostrar_alertas_detalladas(df_stats, distribuciones)
         ordenador_numeros(df_stats, distribuciones)
     else:
         st.info("👈 Presiona 'Ejecutar Análisis de Sumas' para comenzar.")
