@@ -1,0 +1,356 @@
+# -*- coding: utf-8 -*-
+import streamlit as st
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import os
+import calendar
+from collections import defaultdict, Counter
+
+# =============================================================================
+# CONFIGURACIÓN
+# =============================================================================
+RUTA_CSV = 'Flotodo.csv'
+RUTA_CACHE = 'cache_sumas_flotodo.csv'
+RUTA_HISTORICO = 'historico_sumas_flotodo.csv'
+
+st.set_page_config(
+    page_title="Flotodo - Análisis por Sumas",
+    page_icon="🦩",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+st.title("🦩 Flotodo - Análisis por Sumas de Dígitos")
+st.markdown("Motor predictivo basado en comportamiento histórico de sumas (0-18) + P75")
+
+# =============================================================================
+# ESTADO DE SESIÓN
+# =============================================================================
+if 'df_stats_sumas' not in st.session_state:
+    st.session_state.df_stats_sumas = None
+if 'distribuciones_sumas' not in st.session_state:
+    st.session_state.distribuciones_sumas = None
+
+# =============================================================================
+# FUNCIONES AUXILIARES
+# =============================================================================
+def inicializar_archivo(ruta, columnas):
+    if not os.path.exists(ruta):
+        try:
+            with open(ruta, 'w', encoding='utf-8') as f:
+                f.write(";".join(columnas) + "\n")
+            return True
+        except Exception as e:
+            st.error(f"❌ Error inicializando {ruta}: {e}")
+            return False
+    return True
+
+def parse_fecha_safe(fecha_str):
+    if pd.isna(fecha_str) or str(fecha_str).strip() == '': return None
+    fecha_str = str(fecha_str).strip()
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+        try: return pd.to_datetime(fecha_str, format=fmt, dayfirst=True)
+        except: continue
+    return pd.to_datetime(fecha_str, dayfirst=True, errors='coerce')
+
+def obtener_suma(num):
+    return (num // 10) + (num % 10)
+
+def calcular_estado_actual(gap, limite_p75):
+    if pd.isna(limite_p75) or limite_p75 == 0: return "Normal"
+    if gap > limite_p75: return "Muy Vencido"
+    elif gap > (limite_p75 * 0.66): return "Vencido"
+    else: return "Normal"
+
+# =============================================================================
+# CARGA DE DATOS
+# =============================================================================
+@st.cache_data(ttl=300, show_spinner=False)
+def cargar_datos_flotodo(_ruta_csv):
+    if not os.path.exists(_ruta_csv):
+        inicializar_archivo(_ruta_csv, ["Fecha", "Tipo_Sorteo", "Centena", "Fijo", "C1", "C2"])
+        return pd.DataFrame(columns=["Fecha", "Tipo_Sorteo", "Fijo"]), pd.DataFrame()
+    
+    try:
+        with open(_ruta_csv, 'r', encoding='latin-1') as f:
+            sep = ';' if ';' in f.readline() else ','
+        df = pd.read_csv(_ruta_csv, sep=sep, encoding='latin-1', header=0, dtype=str, on_bad_lines='skip')
+    except:
+        return pd.DataFrame(columns=["Fecha", "Tipo_Sorteo", "Fijo"]), pd.DataFrame()
+
+    df.columns = [str(c).strip() for c in df.columns]
+    rename_map = {c: c.replace(' ', '_') for c in df.columns}
+    df.rename(columns=rename_map, inplace=True)
+    
+    if 'Fecha' not in df.columns or 'Fijo' not in df.columns:
+        st.error("❌ El CSV debe contener columnas 'Fecha' y 'Fijo'")
+        return pd.DataFrame(), pd.DataFrame()
+        
+    df['Fecha'] = df['Fecha'].apply(parse_fecha_safe)
+    df = df.dropna(subset=['Fecha']).copy()
+    df['Fijo'] = pd.to_numeric(df['Fijo'], errors='coerce').fillna(0).astype(int)
+    df['Suma'] = df['Fijo'].apply(obtener_suma)
+    
+    if 'Tipo_Sorteo' in df.columns:
+        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].astype(str).str.upper().str.strip()
+        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map({'TARDE': 'T', 'T': 'T', 'NOCHE': 'N', 'N': 'N'}).fillna('T')
+    else:
+        df['Tipo_Sorteo'] = 'T'
+        
+    df = df.sort_values('Fecha').reset_index(drop=True)
+    df_full = df.copy()
+    df_fijos = df[['Fecha', 'Tipo_Sorteo', 'Fijo', 'Suma']].copy()
+    return df_fijos, df_full
+
+# =============================================================================
+# MOTOR DE ANÁLISIS DE SUMAS
+# =============================================================================
+def pre_calcular_distribuciones_sumas(df_historial):
+    distribuciones = {}
+    for suma in range(19):
+        fechas = df_historial[df_historial['Suma'] == suma]['Fecha'].sort_values().tolist()
+        if len(fechas) < 2:
+            distribuciones[suma] = {'Normal': 33.3, 'Vencido': 33.3, 'Muy Vencido': 33.3, 'Estado_Comun': 'Normal', 'porcentaje': 33.3}
+            continue
+            
+        estados_historicos = []
+        for i in range(1, len(fechas)):
+            gaps_prev = [(fechas[j] - fechas[j-1]).days for j in range(1, i)]
+            limite = int(np.percentile(gaps_prev, 75)) if len(gaps_prev) >= 4 else int(np.median(gaps_prev) * 2)
+            gap_actual = (fechas[i] - fechas[i-1]).days
+            estados_historicos.append(calcular_estado_actual(gap_actual, limite))
+            
+        if estados_historicos:
+            contador = Counter(estados_historicos)
+            total = len(estados_historicos)
+            distribucion = {e: (c/total*100) for e, c in contador.items()}
+            estado_comun = max(distribucion, key=distribucion.get)
+            distribuciones[suma] = {**distribucion, 'Estado_Comun': estado_comun if distribucion[estado_comun] >= 60 else 'Ninguno', 'porcentaje': distribucion.get(estado_comun, 0)}
+        else:
+            distribuciones[suma] = {'Normal': 33.3, 'Vencido': 33.3, 'Muy Vencido': 33.3, 'Estado_Comun': 'Ninguno', 'porcentaje': 0}
+    return distribuciones
+
+def analizar_estadisticas_sumas(df_fijos, fecha_ref, distribuciones_cache=None):
+    if distribuciones_cache is None:
+        distribuciones_cache = pre_calcular_distribuciones_sumas(df_fijos)
+        
+    resultados = []
+    for suma in range(19):
+        fechas = df_fijos[df_fijos['Suma'] == suma]['Fecha'].sort_values().tolist()
+        if not fechas:
+            continue
+            
+        gaps = [(fechas[i] - fechas[i-1]).days for i in range(1, len(fechas))]
+        limite_p75 = int(np.percentile(gaps, 75)) if len(gaps) >= 4 else (int(np.median(gaps) * 2) if gaps else 0)
+        gap_actual = (fecha_ref - fechas[-1]).days
+        estado_actual = calcular_estado_actual(gap_actual, limite_p75)
+        
+        estados_hist = [calcular_estado_actual(g, limite_p75) for g in gaps]
+        total_hist = len(estados_hist)
+        count_n = estados_hist.count('Normal')
+        count_v = estados_hist.count('Vencido')
+        count_mv = estados_hist.count('Muy Vencido')
+        
+        estabilidad = ((total_hist - count_mv) / total_hist * 100) if total_hist > 0 else 0
+        alerta = '⚠️ RECUPERAR' if (estabilidad > 60 and estado_actual in ['Vencido', 'Muy Vencido']) else '-'
+        
+        exceso_ult = 0
+        estado_ult = 'Normal'
+        if len(gaps) >= 1:
+            estado_ult = estados_hist[-1] if estados_hist else 'Normal'
+            if estado_ult == 'Muy Vencido' and limite_p75 > 0:
+                exceso_ult = gaps[-1] - limite_p75
+                
+        dist = distribuciones_cache.get(suma, {})
+        resultados.append({
+            'Suma': suma,
+            'Frecuencia': total_hist + 1,
+            'Veces Normal': count_n,
+            'Veces Vencido': count_v,
+            'Veces Muy Vencido': count_mv,
+            'Estado Actual': estado_actual,
+            'Estabilidad': round(estabilidad, 1),
+            'Tiempo Limite (P75)': limite_p75,
+            'Alerta': alerta,
+            'Estado Ultima Salida': estado_ult,
+            'Exceso Ultima Salida': exceso_ult,
+            'Estado_Comun': dist.get('Estado_Comun', 'Ninguno'),
+            'Porc_Comun': dist.get('porcentaje', 0)
+        })
+    return pd.DataFrame(resultados), distribuciones_cache
+
+# =============================================================================
+# COMPONENTES DE UI
+# =============================================================================
+def mostrar_tabla_comportamiento(distribuciones):
+    st.subheader("📊 Comportamiento Histórico de Sumas")
+    filas = []
+    for s, d in distribuciones.items():
+        rec = f"✅ Jugar en {d['Estado_Comun']}" if d['Estado_Comun'] != 'Ninguno' else "⚠️ Sin patrón claro"
+        filas.append({
+            'Suma': s,
+            'Normal': f"{d.get('Normal', 0):.1f}%",
+            'Vencido': f"{d.get('Vencido', 0):.1f}%",
+            'Muy Vencido': f"{d.get('Muy Vencido', 0):.1f}%",
+            'Estado Común': d['Estado_Comun'],
+            'Recomendación': rec
+        })
+    st.dataframe(pd.DataFrame(filas), hide_index=True, use_container_width=True)
+
+def mostrar_señales_juego(df_stats):
+    if df_stats.empty: return
+    df_senales = df_stats[
+        (df_stats['Alerta'] == '⚠️ RECUPERAR') &
+        (df_stats['Estabilidad'] >= 60) &
+        (df_stats['Estado Actual'].isin(['Vencido', 'Muy Vencido']))
+    ].copy()
+    
+    if not df_senales.empty:
+        st.markdown("---")
+        st.subheader("🎯 Señales de Juego (Auto-Detectadas)")
+        df_senales['Exceso Días'] = (df_senales['Gap Actual'] - df_senales['Tiempo Limite (P75)']).astype(int)
+        df_senales['Prioridad'] = df_senales['Exceso Días'].apply(lambda x: "🔴 Crítica" if x > 5 else ("🟠 Alta" if x > 2 else "🟡 Media"))
+        
+        df_con = df_senales[df_senales['Porc_Comun'] >= 60]
+        df_sin = df_senales[df_senales['Porc_Comun'] < 60]
+        
+        if not df_con.empty:
+            st.success(f"🔥 **{len(df_con)} suma(s) con VENTAJA ESTADÍSTICA**")
+            st.dataframe(df_con[['Suma', 'Estado Actual', 'Estado_Comun', 'Porc_Comun', 'Exceso Días', 'Prioridad']], hide_index=True)
+        if not df_sin.empty:
+            st.info(f"🟡 **{len(df_sin)} suma(s) con timing favorable pero SIN patrón claro**")
+            st.dataframe(df_sin[['Suma', 'Estado Actual', 'Estado_Comun', 'Porc_Comun', 'Exceso Días']], hide_index=True)
+
+def mostrar_ultimos_resultados_sidebar(df_full):
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📋 Últimos Resultados + Suma")
+    if df_full.empty:
+        st.sidebar.info("ℹ️ Sin datos")
+        return
+    ultimos = df_full.sort_values('Fecha', ascending=False).head(5)
+    for _, row in ultimos.iterrows():
+        num = int(row['Fijo'])
+        suma = obtener_suma(num)
+        fecha = row['Fecha'].strftime('%d/%m') if pd.notna(row['Fecha']) else 'N/A'
+        sesion = row.get('Tipo_Sorteo', 'T')
+        st.sidebar.markdown(f"**📅 {fecha} | {sesion}**")
+        st.sidebar.markdown(f"🔢 `{num:02d}` → ➕ `{suma}`")
+        st.sidebar.markdown("---")
+
+def ordenador_numeros(df_stats, distribuciones):
+    st.markdown("---")
+    st.subheader("🔢 Ordenador de Números por Suma")
+    st.caption("Ingresa números separados por comas o espacios. La app los ordenará según la presión estadística de su suma.")
+    
+    entrada = st.text_area("Números:", height=80, placeholder="12, 45, 08, 99...", key="input_nums")
+    
+    if st.button("🔄 Ordenar por Algoritmo", key="btn_ordenar", use_container_width=True):
+        if not entrada.strip():
+            st.warning("⚠️ Ingresa al menos un número.")
+            return
+            
+        nums = []
+        for n in entrada.replace(',', ' ').replace('\n', ' ').split():
+            n = n.strip()
+            if n.isdigit() and 0 <= int(n) <= 99:
+                nums.append(int(n))
+        nums = sorted(list(set(nums)))
+        
+        if not nums:
+            st.error("❌ No se encontraron números válidos (00-99).")
+            return
+            
+        # Calcular scores
+        resultados = []
+        for num in nums:
+            s = obtener_suma(num)
+            row = df_stats[df_stats['Suma'] == s]
+            if row.empty: continue
+            row = row.iloc[0]
+            
+            score = 0
+            if row['Porc_Comun'] >= 60: score += 100
+            elif row['Porc_Comun'] >= 50: score += 70
+            else: score += 40
+            
+            score += min(max((row['Gap Actual'] - row['Tiempo Limite (P75)']), 0) * 3, 30)
+            score += row['Estabilidad'] * 0.5
+            if row['Alerta'] == '⚠️ RECUPERAR': score += 20
+            
+            resultados.append({
+                'Número': f"{num:02d}",
+                'Suma': s,
+                'Score': round(score, 1),
+                'Estado Suma': row['Estado Actual'],
+                'Estado Común': row['Estado_Comun'],
+                'Prioridad': "🔴 Crítica" if (row['Gap Actual'] - row['Tiempo Limite (P75)']) > 5 else "🟠 Alta"
+            })
+            
+        resultados.sort(key=lambda x: x['Score'], reverse=True)
+        st.success(f"✅ Ordenados {len(resultados)} números.")
+        st.dataframe(pd.DataFrame(resultados), hide_index=True, use_container_width=True)
+        
+        if len(resultados) >= 2:
+            st.info(f"🎯 **Recomendación:** Juega `{resultados[0]['Número']}` y `{resultados[1]['Número']}`")
+
+# =============================================================================
+# MAIN
+# =============================================================================
+def main():
+    st.sidebar.header("⚙️ Configuración")
+    modo_sesion = st.sidebar.radio("Sesión:", ["General", "Tarde", "Noche"], key="radio_sesion")
+    
+    df_fijos, df_full = cargar_datos_flotodo(RUTA_CSV)
+    mostrar_ultimos_resultados_sidebar(df_full)
+    
+    if df_fijos.empty:
+        st.warning("⚠️ Archivo vacío o sin datos válidos. Agrega sorteos a `Flotodo.csv`.")
+        return
+        
+    if modo_sesion != "General":
+        ses_map = {"Tarde": "T", "Noche": "N"}
+        df_analisis = df_fijos[df_fijos['Tipo_Sorteo'] == ses_map[modo_sesion]]
+    else:
+        df_analisis = df_fijos
+        
+    fecha_ref = datetime.now()
+    
+    if st.button("🚀 Ejecutar Análisis de Sumas", type="primary", key="btn_analisis"):
+        with st.spinner("Calculando Gaps, P75 y Estados..."):
+            df_stats, distribuciones = analizar_estadisticas_sumas(df_analisis, fecha_ref)
+            
+            # Guardar en memoria para persistencia
+            st.session_state.df_stats_sumas = df_stats
+            st.session_state.distribuciones_sumas = distribuciones
+            
+            st.session_state.df_stats_sumas['Gap Actual'] = df_stats.apply(
+                lambda r: (fecha_ref - df_analisis[df_analisis['Suma']==r['Suma']]['Fecha'].max()).days, axis=1
+            )
+            
+            mostrar_tabla_comportamiento(distribuciones)
+            
+            st.markdown("---")
+            st.subheader("📈 Estadística de Sumas")
+            cols = ['Suma', 'Frecuencia', 'Veces Normal', 'Veces Vencido', 'Veces Muy Vencido', 
+                    'Estado Actual', 'Estabilidad', 'Tiempo Limite (P75)', 'Alerta', 'Gap Actual', 'Exceso Ultima Salida']
+            st.dataframe(df_stats[cols].sort_values('Frecuencia', ascending=False), hide_index=True, use_container_width=True)
+            
+            mostrar_señales_juego(df_stats)
+            ordenador_numeros(df_stats, distribuciones)
+
+    elif st.session_state.df_stats_sumas is not None:
+        df_stats = st.session_state.df_stats_sumas
+        distribuciones = st.session_state.distribuciones_sumas
+        mostrar_tabla_comportamiento(distribuciones)
+        st.markdown("---")
+        st.subheader("📈 Estadística de Sumas")
+        cols = ['Suma', 'Frecuencia', 'Veces Normal', 'Veces Vencido', 'Veces Muy Vencido', 
+                'Estado Actual', 'Estabilidad', 'Tiempo Limite (P75)', 'Alerta', 'Gap Actual', 'Exceso Ultima Salida']
+        st.dataframe(df_stats[cols].sort_values('Frecuencia', ascending=False), hide_index=True, use_container_width=True)
+        mostrar_señales_juego(df_stats)
+        ordenador_numeros(df_stats, distribuciones)
+    else:
+        st.info("👈 Presiona 'Ejecutar Análisis de Sumas' para comenzar.")
+
+if __name__ == "__main__":
+    main()
