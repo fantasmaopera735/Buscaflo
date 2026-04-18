@@ -95,8 +95,10 @@ def cargar_datos_flotodo(_ruta_csv):
     
     if 'Tipo_Sorteo' in df.columns:
         df['Tipo_Sorteo'] = df['Tipo_Sorteo'].astype(str).str.upper().str.strip()
-        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map({'TARDE': 'T', 'T': 'T', 'NOCHE': 'N', 'N': 'N', 'MAÑANA':'M', 'MANANA':'M'}).fillna('T')
-        df = df[df['Tipo_Sorteo'].isin(['T', 'N'])].copy()
+        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map({
+            'TARDE': 'T', 'T': 'T', 'NOCHE': 'N', 'N': 'N', 
+            'MAÑANA':'M', 'MANANA':'M'
+        }).fillna('T')
     else:
         df['Tipo_Sorteo'] = 'T'
         
@@ -109,7 +111,10 @@ def cargar_datos_flotodo(_ruta_csv):
 def pre_calcular_distribuciones_sumas(df_historial):
     distribuciones = {}
     for suma in range(19):
+        # Filtramos estrictamente por suma dentro del dataframe que recibimos
         fechas = df_historial[df_historial['Suma'] == suma]['Fecha'].sort_values().tolist()
+        
+        # Si hay muy pocos datos, asumimos neutralidad
         if len(fechas) < 2:
             distribuciones[suma] = {'Normal': 33.3, 'Vencido': 33.3, 'Muy Vencido': 33.3, 'Estado_Comun': 'Normal', 'porcentaje': 33.3}
             continue
@@ -117,6 +122,8 @@ def pre_calcular_distribuciones_sumas(df_historial):
         estados_historicos = []
         for i in range(1, len(fechas)):
             gaps_prev = [(fechas[j] - fechas[j-1]).days for j in range(1, i)]
+            
+            # Cálculo seguro de Percentil 75
             if not gaps_prev:
                 limite = 0
             elif len(gaps_prev) >= 4:
@@ -147,11 +154,14 @@ def analizar_estadisticas_sumas(df_fijos, fecha_ref, distribuciones_cache=None):
         
     resultados = []
     for suma in range(19):
+        # Filtramos estrictamente por suma
         fechas = df_fijos[df_fijos['Suma'] == suma]['Fecha'].sort_values().tolist()
         if not fechas:
             continue
             
         gaps = [(fechas[i] - fechas[i-1]).days for i in range(1, len(fechas))]
+        
+        # Cálculo de P75
         limite_p75 = int(np.percentile(gaps, 75)) if len(gaps) >= 4 else (int(np.median(gaps) * 2) if gaps else 0)
         gap_actual = (fecha_ref - fechas[-1]).days
         estado_actual = calcular_estado_actual(gap_actual, limite_p75)
@@ -214,19 +224,19 @@ def mostrar_estadistica_sumas(df_stats):
     st.markdown("---")
     st.subheader("📈 Estadística de Sumas (Completa)")
     if df_stats.empty:
-        st.info("ℹ️ Sin datos estadísticos.")
+        st.info("ℹ️ Sin datos estadísticos para esta selección.")
         return
     cols = ['Suma', 'Frecuencia', 'Veces Normal', 'Veces Vencido', 'Veces Muy Vencido', 
             'Estado Actual', 'Estabilidad', 'Tiempo Limite (P75)', 'Alerta', 'Gap Actual', 'Exceso Ultima Salida']
     st.dataframe(df_stats[cols].sort_values('Frecuencia', ascending=False), hide_index=True, use_container_width=True)
 
-def mostrar_historial_sumas(df_fijos):
+def mostrar_historial_sumas(df_data):
     st.markdown("---")
-    st.subheader("📜 Historial de Salidas de Sumas (Reciente a Antiguo)")
-    if df_fijos.empty:
-        st.info("ℹ️ Sin historial.")
+    st.subheader("📜 Historial de Salidas (Reciente a Antiguo)")
+    if df_data.empty:
+        st.info("ℹ️ Sin historial disponible.")
         return
-    df_hist = df_fijos[['Fecha', 'Tipo_Sorteo', 'Fijo', 'Suma']].copy()
+    df_hist = df_data[['Fecha', 'Tipo_Sorteo', 'Fijo', 'Suma']].copy()
     df_hist = df_hist.sort_values('Fecha', ascending=False).reset_index(drop=True)
     df_hist['Tipo_Sorteo'] = df_hist['Tipo_Sorteo'].map({'T': 'Tarde', 'N': 'Noche'})
     st.dataframe(df_hist.head(30), hide_index=True, use_container_width=True)
@@ -314,7 +324,7 @@ def mostrar_ultimos_resultados_sidebar(df_full):
         st.sidebar.info("ℹ️ Sin datos")
         return
     
-    # Solo último de Tarde y último de Noche
+    # Lógica corregida: Siempre mostrar el último de T y último de N independientemente del filtro
     for sesion, nombre in [('T', '☀️ Tarde'), ('N', '🌙 Noche')]:
         df_sesion = df_full[df_full['Tipo_Sorteo'] == sesion]
         if not df_sesion.empty:
@@ -395,34 +405,43 @@ def main():
     st.sidebar.header("⚙️ Configuración")
     modo_sesion = st.sidebar.radio("Sesión:", ["General", "Tarde", "Noche"], key="radio_sesion")
     
-    df_fijos, df_full = cargar_datos_flotodo(RUTA_CSV)
+    # Cargamos TODOS los datos primero
+    df_todo, df_full = cargar_datos_flotodo(RUTA_CSV)
     st.session_state.df_full_cache = df_full
+    
+    # Mostramos sidebar con los últimos resultados (siempre T y N)
     mostrar_ultimos_resultados_sidebar(df_full)
     
-    if df_fijos.empty:
+    if df_todo.empty:
         st.warning("⚠️ Archivo vacío o sin datos válidos. Agrega sorteos a `Flotodo.csv`.")
         return
         
+    # Filtramos los datos según la selección de la sesión
     if modo_sesion != "General":
         ses_map = {"Tarde": "T", "Noche": "N"}
-        df_analisis = df_fijos[df_fijos['Tipo_Sorteo'] == ses_map[modo_sesion]]
+        df_analisis = df_todo[df_todo['Tipo_Sorteo'] == ses_map[modo_sesion]]
     else:
-        df_analisis = df_fijos
+        df_analisis = df_todo
         
     fecha_ref = datetime.now()
     
+    # Indicador de cuántos datos se están analizando
+    st.info(f"📊 Analizando **{len(df_analisis)}** sorteos para la sesión: **{modo_sesion}**")
+
     if st.button("🚀 Ejecutar Análisis de Sumas", type="primary", key="btn_analisis"):
         with st.spinner("Calculando Gaps, P75 y Estados..."):
+            # IMPORTANTE: Pasamos df_analisis (filtrado) al motor
             df_stats, distribuciones = analizar_estadisticas_sumas(df_analisis, fecha_ref)
             
-                        # 🧠 Guardar en memoria para persistencia
+            # 🧠 Guardar en memoria para persistencia
             st.session_state.df_stats_sumas = df_stats
             st.session_state.distribuciones_sumas = distribuciones
+            st.session_state.df_analisis_cache = df_analisis
             
             # Renderizado en orden lógico
             mostrar_tabla_comportamiento(distribuciones)
             mostrar_estadistica_sumas(df_stats)
-            mostrar_historial_sumas(df_fijos)
+            mostrar_historial_sumas(df_analisis)
             mostrar_señales_juego(df_stats)
             mostrar_alertas_detalladas(df_stats, distribuciones)
             ordenador_numeros(df_stats, distribuciones)
@@ -430,10 +449,11 @@ def main():
     elif st.session_state.df_stats_sumas is not None:
         df_stats = st.session_state.df_stats_sumas
         distribuciones = st.session_state.distribuciones_sumas
+        df_analisis = st.session_state.get('df_analisis_cache', df_todo)
         
         mostrar_tabla_comportamiento(distribuciones)
         mostrar_estadistica_sumas(df_stats)
-        mostrar_historial_sumas(df_fijos)
+        mostrar_historial_sumas(df_analisis)
         mostrar_señales_juego(df_stats)
         mostrar_alertas_detalladas(df_stats, distribuciones)
         ordenador_numeros(df_stats, distribuciones)
