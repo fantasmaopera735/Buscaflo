@@ -66,7 +66,7 @@ def calcular_estado_actual(gap, limite_p75):
     else: return "Normal"
 
 # =============================================================================
-# CARGA DE DATOS
+# CARGA DE DATOS (MEJORADA PARA EVITAR ERRORES DE LECTURA)
 # =============================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def cargar_datos_flotodo(_ruta_csv):
@@ -80,25 +80,36 @@ def cargar_datos_flotodo(_ruta_csv):
             sep = ';' if ';' in primera else (',' if ',' in primera else '\t')
         df = pd.read_csv(_ruta_csv, sep=sep, encoding='latin-1', header=0, dtype=str, on_bad_lines='skip')
     except Exception as e:
-        st.error(f"❌ Error leyendo CSV: {e}")
         return pd.DataFrame(columns=["Fecha", "Tipo_Sorteo", "Fijo", "Suma"]), pd.DataFrame()
 
+    # Limpiar nombres de columnas
     df.columns = [str(c).strip() for c in df.columns]
+    
+    # Validar columnas esenciales
     if 'Fecha' not in df.columns or 'Fijo' not in df.columns:
-        st.error("❌ El CSV debe contener columnas 'Fecha' y 'Fijo'")
         return pd.DataFrame(columns=["Fecha", "Tipo_Sorteo", "Fijo", "Suma"]), pd.DataFrame()
         
+    # Parsear fechas y números
     df['Fecha'] = df['Fecha'].apply(parse_fecha_safe)
     df = df.dropna(subset=['Fecha']).copy()
     df['Fijo'] = pd.to_numeric(df['Fijo'], errors='coerce').fillna(0).astype(int)
     df['Suma'] = df['Fijo'].apply(obtener_suma)
     
+    # 🧹 LIMPIEZA PROFUNDA DE SESIONES (Arregla el problema de 0 sorteos)
     if 'Tipo_Sorteo' in df.columns:
+        # Convertir a mayúsculas y quitar espacios en blanco
         df['Tipo_Sorteo'] = df['Tipo_Sorteo'].astype(str).str.upper().str.strip()
-        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map({
-            'TARDE': 'T', 'T': 'T', 'NOCHE': 'N', 'N': 'N', 
-            'MAÑANA':'M', 'MANANA':'M'
-        }).fillna('T')
+        
+        # Mapeo robusto para evitar errores
+        mapeo_sesiones = {
+            'TARDE': 'T', 'T': 'T', 
+            'NOCHE': 'N', 'N': 'N', 
+            'MAÑANA': 'T', 'MANANA': 'T', 'M': 'T'
+        }
+        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map(mapeo_sesiones).fillna('T')
+        
+        # Filtrar solo lo que interesa
+        df = df[df['Tipo_Sorteo'].isin(['T', 'N'])].copy()
     else:
         df['Tipo_Sorteo'] = 'T'
         
@@ -399,36 +410,49 @@ def ordenador_numeros(df_stats, distribuciones):
         st.info("ℹ️ Ejecuta el análisis primero para activar el ordenador de números.")
 
 # =============================================================================
-# MAIN
+# MAIN (CON BOTÓN DE RECARGA)
 # =============================================================================
 def main():
     st.sidebar.header("⚙️ Configuración")
-    modo_sesion = st.sidebar.radio("Sesión:", ["General", "Tarde", "Noche"], key="radio_sesion")
+    
+    # 🔄 BOTÓN DE FORZAR RECARGA (Nuevo)
+    if st.sidebar.button("🔄 Forzar Recarga / Actualizar CSV", type="primary", use_container_width=True):
+        st.cache_data.clear() # Borra caché
+        for key in list(st.session_state.keys()): # Borra estado guardado
+            del st.session_state[key]
+        st.rerun() # Reinicia la app
+
+    modo_sesion = st.sidebar.radio("Sesión de Análisis:", ["General", "Tarde", "Noche"], key="radio_sesion")
     
     # Cargamos TODOS los datos primero
     df_todo, df_full = cargar_datos_flotodo(RUTA_CSV)
     st.session_state.df_full_cache = df_full
     
-    # Mostramos sidebar con los últimos resultados (siempre T y N)
+    # Mostramos sidebar con los últimos resultados
     mostrar_ultimos_resultados_sidebar(df_full)
     
     if df_todo.empty:
-        st.warning("⚠️ Archivo vacío o sin datos válidos. Agrega sorteos a `Flotodo.csv`.")
+        st.warning("⚠️ Archivo vacío o sin datos válidos. Verifica que `Flotodo.csv` tenga datos.")
         return
-        
-    # Filtramos los datos según la selección de la sesión
-    if modo_sesion != "General":
-        ses_map = {"Tarde": "T", "Noche": "N"}
-        df_analisis = df_todo[df_todo['Tipo_Sorteo'] == ses_map[modo_sesion]]
+
+    # --- FILTRADO DE DATOS ---
+    if modo_sesion == "Tarde":
+        df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'T'].copy()
+    elif modo_sesion == "Noche":
+        df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'N'].copy()
     else:
-        df_analisis = df_todo
+        df_analisis = df_todo.copy()
         
     fecha_ref = datetime.now()
     
-    # Indicador de cuántos datos se están analizando
+    # Indicador de depuración (Para que veas cuántos datos cargó)
     st.info(f"📊 Analizando **{len(df_analisis)}** sorteos para la sesión: **{modo_sesion}**")
 
     if st.button("🚀 Ejecutar Análisis de Sumas", type="primary", key="btn_analisis"):
+        if len(df_analisis) == 0:
+            st.error(f"❌ No hay datos para '{modo_sesion}'. Verifica que el CSV tenga 'Tarde' o 'Noche' en la columna de sesión.")
+            return
+
         with st.spinner("Calculando Gaps, P75 y Estados..."):
             # IMPORTANTE: Pasamos df_analisis (filtrado) al motor
             df_stats, distribuciones = analizar_estadisticas_sumas(df_analisis, fecha_ref)
@@ -438,7 +462,7 @@ def main():
             st.session_state.distribuciones_sumas = distribuciones
             st.session_state.df_analisis_cache = df_analisis
             
-            # Renderizado en orden lógico
+            # Renderizado
             mostrar_tabla_comportamiento(distribuciones)
             mostrar_estadistica_sumas(df_stats)
             mostrar_historial_sumas(df_analisis)
@@ -447,6 +471,7 @@ def main():
             ordenador_numeros(df_stats, distribuciones)
 
     elif st.session_state.df_stats_sumas is not None:
+        # Recuperar memoria
         df_stats = st.session_state.df_stats_sumas
         distribuciones = st.session_state.distribuciones_sumas
         df_analisis = st.session_state.get('df_analisis_cache', df_todo)
