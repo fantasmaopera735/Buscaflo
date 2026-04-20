@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
 from collections import Counter
 
@@ -66,7 +66,7 @@ def calcular_estado_actual(gap, limite_p75):
     else: return "Normal"
 
 # =============================================================================
-# CARGA DE DATOS (MEJORADA PARA GEORGIA)
+# CARGA DE DATOS (GEORGIA - Geotodo.csv)
 # =============================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def cargar_datos_geotodo(_ruta_csv):
@@ -93,22 +93,18 @@ def cargar_datos_geotodo(_ruta_csv):
     df['Fijo'] = pd.to_numeric(df['Fijo'], errors='coerce').fillna(0).astype(int)
     df['Suma'] = df['Fijo'].apply(obtener_suma)
     
-    # 🧹 LIMPIEZA Estricta de Sesiones (M=Mañana, T=Tarde, N=Noche)
-    # Aquí está la corrección clave para que 'M' no se convierta en 'Tarde'
+    # 🧹 Limpieza estricta de sesiones para Georgia
     if 'Tipo_Sorteo' in df.columns:
         df['Tipo_Sorteo'] = df['Tipo_Sorteo'].astype(str).str.upper().str.strip()
-        mapeo_sesiones = {
+        mapeo = {
             'MAÑANA': 'M', 'MANANA': 'M', 'MORNING': 'M', 'M': 'M',
             'TARDE': 'T', 'AFTERNOON': 'T', 'T': 'T',
             'NOCHE': 'N', 'NIGHT': 'N', 'N': 'N'
         }
-        # Mapeo directo
-        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map(mapeo_sesiones)
-        
-        # Eliminamos filas que no son M, T o N
+        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map(mapeo)
         df = df[df['Tipo_Sorteo'].isin(['M', 'T', 'N'])].copy()
     else:
-        df['Tipo_Sorteo'] = 'T' # Default solo si no hay columna
+        df['Tipo_Sorteo'] = 'T'
         
     df = df.sort_values('Fecha').reset_index(drop=True)
     return df[['Fecha', 'Tipo_Sorteo', 'Fijo', 'Suma']].copy(), df.copy()
@@ -119,10 +115,7 @@ def cargar_datos_geotodo(_ruta_csv):
 def pre_calcular_distribuciones_sumas(df_historial):
     distribuciones = {}
     for suma in range(19):
-        # Filtramos estrictamente por suma dentro del dataframe que recibimos
         fechas = df_historial[df_historial['Suma'] == suma]['Fecha'].sort_values().tolist()
-        
-        # Si hay muy pocos datos, asumimos neutralidad
         if len(fechas) < 2:
             distribuciones[suma] = {'Normal': 33.3, 'Vencido': 33.3, 'Muy Vencido': 33.3, 'Estado_Comun': 'Normal', 'porcentaje': 33.3}
             continue
@@ -130,8 +123,6 @@ def pre_calcular_distribuciones_sumas(df_historial):
         estados_historicos = []
         for i in range(1, len(fechas)):
             gaps_prev = [(fechas[j] - fechas[j-1]).days for j in range(1, i)]
-            
-            # Cálculo seguro de Percentil 75
             if not gaps_prev:
                 limite = 0
             elif len(gaps_prev) >= 4:
@@ -162,14 +153,10 @@ def analizar_estadisticas_sumas(df_fijos, fecha_ref, distribuciones_cache=None):
         
     resultados = []
     for suma in range(19):
-        # Filtramos estrictamente por suma
         fechas = df_fijos[df_fijos['Suma'] == suma]['Fecha'].sort_values().tolist()
-        if not fechas:
-            continue
+        if not fechas: continue
             
         gaps = [(fechas[i] - fechas[i-1]).days for i in range(1, len(fechas))]
-        
-        # Cálculo de P75
         limite_p75 = int(np.percentile(gaps, 75)) if len(gaps) >= 4 else (int(np.median(gaps) * 2) if gaps else 0)
         gap_actual = (fecha_ref - fechas[-1]).days
         estado_actual = calcular_estado_actual(gap_actual, limite_p75)
@@ -332,18 +319,13 @@ def mostrar_ultimos_resultados_sidebar(df_full):
         st.sidebar.info("ℹ️ Sin datos")
         return
     
-    # CORRECCIÓN: Mostrar EXACTAMENTE el último resultado de M, T y N si existen
     for letra, nombre in [('M', '🌅 Mañana'), ('T', '☀️ Tarde'), ('N', '🌙 Noche')]:
-        # Filtramos estrictamente por la letra
         df_sesion = df_full[df_full['Tipo_Sorteo'] == letra]
-        
         if not df_sesion.empty:
-            # Tomamos el último ordenado por fecha
             ultimo = df_sesion.sort_values('Fecha', ascending=False).iloc[0]
             num = int(ultimo['Fijo'])
             suma = obtener_suma(num)
             fecha = ultimo['Fecha'].strftime('%d/%m/%Y') if pd.notna(ultimo['Fecha']) else 'N/A'
-            
             st.sidebar.markdown(f"**{nombre}**")
             st.sidebar.markdown(f"📅 {fecha}")
             st.sidebar.markdown(f"🔢 `{num:02d}` → ➕ `{suma}`")
@@ -354,7 +336,6 @@ def ordenador_numeros(df_stats, distribuciones):
     st.subheader("🔢 Ordenador de Números por Suma")
     st.caption("Ingresa números separados por comas o espacios. La app los ordenará según la presión estadística de su suma.")
     
-    # Recuperar datos de memoria si la UI se reinició
     df_stats_activo = df_stats if 'df_stats' in locals() else st.session_state.get('df_stats_sumas')
     distribuciones_activo = distribuciones if 'distribuciones' in locals() else st.session_state.get('distribuciones_sumas')
     
@@ -430,7 +411,6 @@ def main():
     st.session_state.df_full_cache = df_full
     
     # 2. Mostramos la barra lateral con los últimos resultados de TODAS las sesiones
-    # Importante: Pasamos 'df_full' aquí, no el filtrado, para que veas M, T y N siempre.
     mostrar_ultimos_resultados_sidebar(df_full) 
     
     if df_todo.empty:
@@ -441,4 +421,52 @@ def main():
     if modo_sesion == "Mañana":
         df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'M'].copy()
     elif modo_sesion == "Tarde":
-        df_analisis = df_todo[df_todo['Tipo_Sorteo']
+        df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'T'].copy()
+    elif modo_sesion == "Noche":
+        df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'N'].copy()
+    else:
+        df_analisis = df_todo.copy()
+        
+    fecha_ref = datetime.now()
+    st.info(f"📊 Analizando **{len(df_analisis)}** sorteos para la sesión: **{modo_sesion}**")
+
+    # 4. Botón de ejecución
+    if st.button("🚀 Ejecutar Análisis de Sumas", type="primary", key="btn_analisis"):
+        if len(df_analisis) == 0:
+            st.error(f"❌ No hay datos para '{modo_sesion}'. Verifica que el CSV tenga sesiones válidas (M/T/N).")
+            return
+
+        with st.spinner("Calculando Gaps, P75 y Estados..."):
+            # 🔥 IMPORTANTE: Pasamos 'df_analisis' (el filtrado) al motor de estadísticas
+            df_stats, distribuciones = analizar_estadisticas_sumas(df_analisis, fecha_ref)
+            
+            # 🧠 Guardar en memoria para persistencia (evita que se cierre al ordenar números)
+            st.session_state.df_stats_sumas = df_stats
+            st.session_state.distribuciones_sumas = distribuciones
+            st.session_state.df_analisis_cache = df_analisis
+            
+            # Renderizado de tablas
+            mostrar_tabla_comportamiento(distribuciones)
+            mostrar_estadistica_sumas(df_stats)
+            mostrar_historial_sumas(df_analisis)
+            mostrar_señales_juego(df_stats)
+            mostrar_alertas_detalladas(df_stats, distribuciones)
+            ordenador_numeros(df_stats, distribuciones)
+
+    # 5. Recuperación de estado (si la app se reinicia tras usar el ordenador de números)
+    elif st.session_state.df_stats_sumas is not None:
+        df_stats = st.session_state.df_stats_sumas
+        distribuciones = st.session_state.distribuciones_sumas
+        df_analisis = st.session_state.get('df_analisis_cache', df_todo)
+        
+        mostrar_tabla_comportamiento(distribuciones)
+        mostrar_estadistica_sumas(df_stats)
+        mostrar_historial_sumas(df_analisis)
+        mostrar_señales_juego(df_stats)
+        mostrar_alertas_detalladas(df_stats, distribuciones)
+        ordenador_numeros(df_stats, distribuciones)
+    else:
+        st.info("👈 Presiona 'Ejecutar Análisis de Sumas' para comenzar.")
+
+if __name__ == "__main__":
+    main()
