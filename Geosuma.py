@@ -91,25 +91,20 @@ def cargar_datos_geotodo(_ruta_csv):
     df['Fijo'] = pd.to_numeric(df['Fijo'], errors='coerce').fillna(0).astype(int)
     df['Suma'] = df['Fijo'].apply(obtener_suma)
     
-    # 🧹 LIMPIEZA Estricta de Sesiones
+    # 🧹 LIMPIEZA ESTRICTA (SIN FILLNA 'T')
     if 'Tipo_Sorteo' in df.columns:
-        # Convertir a mayúsculas y QUITAR ESPACIOS en blanco
         df['Tipo_Sorteo'] = df['Tipo_Sorteo'].astype(str).str.upper().str.strip()
-        
-        # Mapeo explícito: Si es M es Mañana, si es T es Tarde.
-        mapeo_sesiones = {
-            'MAÑANA': 'M', 'MANANA': 'M', 'MORNING': 'M', 'M': 'M',
-            'TARDE': 'T', 'AFTERNOON': 'T', 'T': 'T',
-            'NOCHE': 'N', 'NIGHT': 'N', 'N': 'N'
+        mapeo = {
+            'M': 'M', 'MAÑANA': 'M', 'MANANA': 'M', 'MORNING': 'M',
+            'T': 'T', 'TARDE': 'T', 'AFTERNOON': 'T',
+            'N': 'N', 'NOCHE': 'N', 'NIGHT': 'N'
         }
+        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map(mapeo)
         
-        # Si el valor no está en el mapa, se convierte en NaN y luego lo filtramos
-        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map(mapeo_sesiones)
-        
-        # Mantenemos solo lo válido (M, T, N)
+        # ✅ Solo mantenemos filas que sí son M, T o N. Eliminamos el resto.
         df = df[df['Tipo_Sorteo'].isin(['M', 'T', 'N'])].copy()
     else:
-        df['Tipo_Sorteo'] = 'T' # Valor por defecto si no existe la columna
+        df['Tipo_Sorteo'] = 'T'
         
     df = df.sort_values('Fecha').reset_index(drop=True)
     return df[['Fecha', 'Tipo_Sorteo', 'Fijo', 'Suma']].copy(), df.copy()
@@ -403,7 +398,6 @@ def ordenador_numeros(df_stats, distribuciones):
 def main():
     st.sidebar.header("⚙️ Configuración Georgia")
     
-    # Botón de recarga
     if st.sidebar.button("🔄 Forzar Recarga / Actualizar CSV", type="primary", use_container_width=True):
         st.cache_data.clear()
         for key in list(st.session_state.keys()):
@@ -412,18 +406,29 @@ def main():
 
     modo_sesion = st.sidebar.radio("Sesión de Análisis:", ["General", "Mañana", "Tarde", "Noche"], key="radio_sesion")
     
-    # 1. Cargar TODOS los datos
     df_todo, df_full = cargar_datos_geotodo(RUTA_CSV)
     st.session_state.df_full_cache = df_full
     
-    # 2. Mostrar Sidebar con los ÚLTIMOS resultados REALES de cada sesión
-    mostrar_ultimos_resultados_sidebar(df_full) 
-    
+    # 📊 Sidebar: Muestra SOLO las sesiones que realmente existen en el CSV
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📋 Últimos Resultados + Suma")
+    for letra, nombre in [('M', '🌅 Mañana'), ('T', '☀️ Tarde'), ('N', '🌙 Noche')]:
+        df_sesion = df_full[df_full['Tipo_Sorteo'] == letra]
+        if not df_sesion.empty:
+            ultimo = df_sesion.sort_values('Fecha', ascending=False).iloc[0]
+            num = int(ultimo['Fijo'])
+            suma = obtener_suma(num)
+            fecha = ultimo['Fecha'].strftime('%d/%m/%Y') if pd.notna(ultimo['Fecha']) else 'N/A'
+            st.sidebar.markdown(f"**{nombre}**")
+            st.sidebar.markdown(f"📅 {fecha}")
+            st.sidebar.markdown(f"🔢 `{num:02d}` → ➕ `{suma}`")
+            st.sidebar.markdown("---")
+
     if df_todo.empty:
         st.warning("⚠️ Archivo vacío o sin datos válidos.")
         return
 
-    # 3. FILTRAR DATOS según selección (AQUÍ ESTABA EL ERROR)
+    # ✅ Filtrado estricto según selección
     if modo_sesion == "Mañana":
         df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'M'].copy()
     elif modo_sesion == "Tarde":
@@ -438,28 +443,24 @@ def main():
 
     if st.button("🚀 Ejecutar Análisis de Sumas", type="primary", key="btn_analisis"):
         if len(df_analisis) == 0:
-            st.error(f"❌ No hay datos para '{modo_sesion}'. Verifica que el CSV tenga sesiones válidas.")
+            st.error(f"❌ No hay datos para '{modo_sesion}'. Verifica que el CSV tenga 'M', 'T' o 'N'.")
             return
 
         with st.spinner("Calculando Gaps, P75 y Estados..."):
-            # 4. PASAR df_analisis (Filtrado) al motor
             df_stats, distribuciones = analizar_estadisticas_sumas(df_analisis, fecha_ref)
             
-            # Guardar en memoria
             st.session_state.df_stats_sumas = df_stats
             st.session_state.distribuciones_sumas = distribuciones
-            st.session_state.df_analisis_cache = df_analisis # Guardamos el dataframe filtrado
+            st.session_state.df_analisis_cache = df_analisis
             
-            # 5. Renderizar usando los datos filtrados
             mostrar_tabla_comportamiento(distribuciones)
             mostrar_estadistica_sumas(df_stats)
-            mostrar_historial_sumas(df_analisis) # <--- AQUÍ: Pasamos el filtrado
+            mostrar_historial_sumas(df_analisis)
             mostrar_señales_juego(df_stats)
             mostrar_alertas_detalladas(df_stats, distribuciones)
             ordenador_numeros(df_stats, distribuciones)
 
     elif st.session_state.df_stats_sumas is not None:
-        # Recuperar memoria
         df_stats = st.session_state.df_stats_sumas
         distribuciones = st.session_state.distribuciones_sumas
         df_analisis = st.session_state.get('df_analisis_cache', df_todo)
