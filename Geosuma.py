@@ -71,7 +71,7 @@ def calcular_estado_actual(gap, limite_p75):
 @st.cache_data(ttl=300, show_spinner=False)
 def cargar_datos_geotodo(_ruta_csv):
     if not os.path.exists(_ruta_csv):
-        inicializar_archivo(_ruta_csv, ["Fecha", "Tipo_Sorteo", "Centena", "Fijo", "Primer_Corrido", "Segundo_Corrido"])
+        inicializar_archivo(_ruta_csv, ["Fecha", "Tipo_Sorteo", "Fijo"])
         return pd.DataFrame(columns=["Fecha", "Tipo_Sorteo", "Fijo", "Suma"]), pd.DataFrame()
     
     try:
@@ -80,12 +80,10 @@ def cargar_datos_geotodo(_ruta_csv):
             sep = ';' if ';' in primera else (',' if ',' in primera else '\t')
         df = pd.read_csv(_ruta_csv, sep=sep, encoding='latin-1', header=0, dtype=str, on_bad_lines='skip')
     except Exception as e:
-        st.error(f"❌ Error leyendo CSV: {e}")
         return pd.DataFrame(columns=["Fecha", "Tipo_Sorteo", "Fijo", "Suma"]), pd.DataFrame()
 
     df.columns = [str(c).strip() for c in df.columns]
     if 'Fecha' not in df.columns or 'Fijo' not in df.columns:
-        st.error("❌ El CSV debe contener columnas 'Fecha' y 'Fijo'")
         return pd.DataFrame(columns=["Fecha", "Tipo_Sorteo", "Fijo", "Suma"]), pd.DataFrame()
         
     df['Fecha'] = df['Fecha'].apply(parse_fecha_safe)
@@ -93,18 +91,25 @@ def cargar_datos_geotodo(_ruta_csv):
     df['Fijo'] = pd.to_numeric(df['Fijo'], errors='coerce').fillna(0).astype(int)
     df['Suma'] = df['Fijo'].apply(obtener_suma)
     
-    # 🧹 Limpieza y mapeo de 3 sesiones: Mañana, Tarde, Noche
+    # 🧹 LIMPIEZA Estricta de Sesiones
     if 'Tipo_Sorteo' in df.columns:
+        # Convertir a mayúsculas y QUITAR ESPACIOS en blanco
         df['Tipo_Sorteo'] = df['Tipo_Sorteo'].astype(str).str.upper().str.strip()
+        
+        # Mapeo explícito: Si es M es Mañana, si es T es Tarde.
         mapeo_sesiones = {
             'MAÑANA': 'M', 'MANANA': 'M', 'MORNING': 'M', 'M': 'M',
             'TARDE': 'T', 'AFTERNOON': 'T', 'T': 'T',
             'NOCHE': 'N', 'NIGHT': 'N', 'N': 'N'
         }
-        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map(mapeo_sesiones).fillna('T')
+        
+        # Si el valor no está en el mapa, se convierte en NaN y luego lo filtramos
+        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map(mapeo_sesiones)
+        
+        # Mantenemos solo lo válido (M, T, N)
         df = df[df['Tipo_Sorteo'].isin(['M', 'T', 'N'])].copy()
     else:
-        df['Tipo_Sorteo'] = 'T'
+        df['Tipo_Sorteo'] = 'T' # Valor por defecto si no existe la columna
         
     df = df.sort_values('Fecha').reset_index(drop=True)
     return df[['Fecha', 'Tipo_Sorteo', 'Fijo', 'Suma']].copy(), df.copy()
@@ -398,7 +403,7 @@ def ordenador_numeros(df_stats, distribuciones):
 def main():
     st.sidebar.header("⚙️ Configuración Georgia")
     
-    # 🔄 BOTÓN DE FORZAR RECARGA
+    # Botón de recarga
     if st.sidebar.button("🔄 Forzar Recarga / Actualizar CSV", type="primary", use_container_width=True):
         st.cache_data.clear()
         for key in list(st.session_state.keys()):
@@ -407,15 +412,18 @@ def main():
 
     modo_sesion = st.sidebar.radio("Sesión de Análisis:", ["General", "Mañana", "Tarde", "Noche"], key="radio_sesion")
     
+    # 1. Cargar TODOS los datos
     df_todo, df_full = cargar_datos_geotodo(RUTA_CSV)
     st.session_state.df_full_cache = df_full
-    mostrar_ultimos_resultados_sidebar(df_full)
+    
+    # 2. Mostrar Sidebar con los ÚLTIMOS resultados REALES de cada sesión
+    mostrar_ultimos_resultados_sidebar(df_full) 
     
     if df_todo.empty:
-        st.warning("⚠️ Archivo vacío o sin datos válidos. Agrega sorteos a `Geotodo.csv`.")
+        st.warning("⚠️ Archivo vacío o sin datos válidos.")
         return
 
-    # Filtrar según selección
+    # 3. FILTRAR DATOS según selección (AQUÍ ESTABA EL ERROR)
     if modo_sesion == "Mañana":
         df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'M'].copy()
     elif modo_sesion == "Tarde":
@@ -430,25 +438,28 @@ def main():
 
     if st.button("🚀 Ejecutar Análisis de Sumas", type="primary", key="btn_analisis"):
         if len(df_analisis) == 0:
-            st.error(f"❌ No hay datos para '{modo_sesion}'. Verifica que el CSV tenga sesiones válidas (M/T/N).")
+            st.error(f"❌ No hay datos para '{modo_sesion}'. Verifica que el CSV tenga sesiones válidas.")
             return
 
         with st.spinner("Calculando Gaps, P75 y Estados..."):
+            # 4. PASAR df_analisis (Filtrado) al motor
             df_stats, distribuciones = analizar_estadisticas_sumas(df_analisis, fecha_ref)
             
-            # 🧠 Guardar en memoria para persistencia
+            # Guardar en memoria
             st.session_state.df_stats_sumas = df_stats
             st.session_state.distribuciones_sumas = distribuciones
-            st.session_state.df_analisis_cache = df_analisis
+            st.session_state.df_analisis_cache = df_analisis # Guardamos el dataframe filtrado
             
+            # 5. Renderizar usando los datos filtrados
             mostrar_tabla_comportamiento(distribuciones)
             mostrar_estadistica_sumas(df_stats)
-            mostrar_historial_sumas(df_analisis)
+            mostrar_historial_sumas(df_analisis) # <--- AQUÍ: Pasamos el filtrado
             mostrar_señales_juego(df_stats)
             mostrar_alertas_detalladas(df_stats, distribuciones)
             ordenador_numeros(df_stats, distribuciones)
 
     elif st.session_state.df_stats_sumas is not None:
+        # Recuperar memoria
         df_stats = st.session_state.df_stats_sumas
         distribuciones = st.session_state.distribuciones_sumas
         df_analisis = st.session_state.get('df_analisis_cache', df_todo)
