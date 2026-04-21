@@ -66,12 +66,12 @@ def calcular_estado_actual(gap, limite_p75):
     else: return "Normal"
 
 # =============================================================================
-# CARGA DE DATOS (GEORGIA - Geotodo.csv)
+# CARGA DE DATOS (GEORGIA - 3 SESIONES)
 # =============================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def cargar_datos_geotodo(_ruta_csv):
     if not os.path.exists(_ruta_csv):
-        inicializar_archivo(_ruta_csv, ["Fecha", "Tipo_Sorteo", "Fijo"])
+        inicializar_archivo(_ruta_csv, ["Fecha", "Tipo_Sorteo", "Centena", "Fijo", "Primer_Corrido", "Segundo_Corrido"])
         return pd.DataFrame(columns=["Fecha", "Tipo_Sorteo", "Fijo", "Suma"]), pd.DataFrame()
     
     try:
@@ -93,15 +93,15 @@ def cargar_datos_geotodo(_ruta_csv):
     df['Fijo'] = pd.to_numeric(df['Fijo'], errors='coerce').fillna(0).astype(int)
     df['Suma'] = df['Fijo'].apply(obtener_suma)
     
-    # 🧹 Limpieza estricta de sesiones para Georgia
+    # 🧹 Limpieza y mapeo de 3 sesiones: Mañana (M), Tarde (T), Noche (N)
     if 'Tipo_Sorteo' in df.columns:
         df['Tipo_Sorteo'] = df['Tipo_Sorteo'].astype(str).str.upper().str.strip()
-        mapeo = {
+        mapeo_sesiones = {
             'MAÑANA': 'M', 'MANANA': 'M', 'MORNING': 'M', 'M': 'M',
             'TARDE': 'T', 'AFTERNOON': 'T', 'T': 'T',
             'NOCHE': 'N', 'NIGHT': 'N', 'N': 'N'
         }
-        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map(mapeo)
+        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map(mapeo_sesiones).fillna('T')
         df = df[df['Tipo_Sorteo'].isin(['M', 'T', 'N'])].copy()
     else:
         df['Tipo_Sorteo'] = 'T'
@@ -319,6 +319,7 @@ def mostrar_ultimos_resultados_sidebar(df_full):
         st.sidebar.info("ℹ️ Sin datos")
         return
     
+    # Mostrar el último resultado de Mañana, Tarde y Noche
     for letra, nombre in [('M', '🌅 Mañana'), ('T', '☀️ Tarde'), ('N', '🌙 Noche')]:
         df_sesion = df_full[df_full['Tipo_Sorteo'] == letra]
         if not df_sesion.empty:
@@ -437,7 +438,6 @@ def main():
             return
 
         with st.spinner("Calculando Gaps, P75 y Estados..."):
-            # 🔥 IMPORTANTE: Pasamos 'df_analisis' (el filtrado) al motor de estadísticas
             df_stats, distribuciones = analizar_estadisticas_sumas(df_analisis, fecha_ref)
             
             # 🧠 Guardar en memoria para persistencia (evita que se cierre al ordenar números)
