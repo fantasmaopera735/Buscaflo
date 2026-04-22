@@ -77,19 +77,48 @@ def cargar_datos_flotodo(_ruta_csv):
         return pd.DataFrame(columns=["Fecha", "Tipo_Sorteo", "Fijo"]), pd.DataFrame()
 
     df.columns = [str(c).strip() for c in df.columns]
-    if 'Fecha' not in df.columns or 'Fijo' not in df.columns:
-        st.error("❌ El CSV debe contener columnas 'Fecha' y 'Fijo'")
-        return pd.DataFrame(columns=["Fecha", "Tipo_Sorteo", "Fijo"]), pd.DataFrame()
+    
+    # 🔍 DETECCIÓN DINÁMICA DE COLUMNAS
+    col_fecha = next((c for c in df.columns if 'FECHA' in c.upper()), None)
+    col_sesion = next((c for c in df.columns if any(k in c.upper() for k in ['SESION', 'TIPO', 'SORTEO', 'TARDE', 'NOCHE'])), None)
+    col_fijo = next((c for c in df.columns if 'FIJO' in c.upper() and 'CORRIDO' not in c.upper()), None)
+    
+    if not col_fecha or not col_fijo:
+        st.error("❌ No se encontraron columnas 'Fecha' y 'Fijo' en el CSV.")
+        return pd.DataFrame(), pd.DataFrame()
+        
+    df = df[[col_fecha, col_fijo]].copy()
+    if col_sesion:
+        df[col_sesion] = df[col_sesion].copy()
+    df.rename(columns={col_fecha: 'Fecha', col_fijo: 'Fijo'}, inplace=True)
+    if col_sesion:
+        df.rename(columns={col_sesion: 'Tipo_Sorteo'}, inplace=True)
+    else:
+        df['Tipo_Sorteo'] = 'T'
         
     df['Fecha'] = df['Fecha'].apply(parse_fecha_safe)
     df = df.dropna(subset=['Fecha']).copy()
     df['Fijo'] = pd.to_numeric(df['Fijo'], errors='coerce').fillna(0).astype(int)
     
-    # 🧹 Limpieza estricta para Flotodo (SOLO TARDE Y NOCHE)
+    # 🧹 LIMPIEZA AGRESIVA + DIAGNÓSTICO
     if 'Tipo_Sorteo' in df.columns:
-        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].astype(str).str.upper().str.strip()
-        mapeo = {'TARDE': 'T', 'AFTERNOON': 'T', 'T': 'T', 'NOCHE': 'N', 'NIGHT': 'N', 'N': 'N'}
-        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map(mapeo)
+        # Eliminar espacios, convertir mayúsculas, quitar caracteres no alfanuméricos
+        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].astype(str).str.strip().str.upper()
+        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].str.replace(r'[^A-Z0-9]', '', regex=True)
+        
+        # Mapeo estricto para Flotodo
+        df['Tipo_Sorteo'] = df['Tipo_Sorteo'].map({
+            'TARDE': 'T', 'AFTERNOON': 'T', 'T': 'T',
+            'NOCHE': 'N', 'NIGHT': 'N', 'N': 'N'
+        }).fillna('OTRO')
+        
+        # 📊 DEBUG: Mostrar qué leyó realmente el CSV
+        unicos = df['Tipo_Sorteo'].unique().tolist()
+        count_t = len(df[df['Tipo_Sorteo']=='T'])
+        count_n = len(df[df['Tipo_Sorteo']=='N'])
+        st.sidebar.markdown(f"🔍 **Sesiones en CSV:** `{unicos}`")
+        st.sidebar.markdown(f"📊 **Tarde (T):** `{count_t}` | **Noche (N):** `{count_n}`")
+        
         df = df[df['Tipo_Sorteo'].isin(['T', 'N'])].copy()
     else:
         df['Tipo_Sorteo'] = 'T'
