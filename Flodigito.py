@@ -10,15 +10,14 @@ from collections import Counter
 # CONFIGURACIÓN
 # =============================================================================
 RUTA_CSV = 'Flotodo.csv'
-RUTA_CACHE = 'cache_digitos_florido.csv'
 
 st.set_page_config(
-    page_title="Florido - Análisis de Dígitos P75",
+    page_title="Flotodo - Análisis de Dígitos P75",
     page_icon="🌺",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-st.title("🌺 Florido - Análisis de Dígitos P75 (Decena/Unidad)")
+st.title("🌺 Flotodo - Análisis de Dígitos P75 (Decena/Unidad)")
 st.markdown("Motor predictivo basado en comportamiento individual de dígitos + Percentil 75")
 
 # =============================================================================
@@ -28,6 +27,8 @@ if 'df_digitos_stats' not in st.session_state:
     st.session_state.df_digitos_stats = None
 if 'df_full_cache' not in st.session_state:
     st.session_state.df_full_cache = None
+if 'last_session_filter' not in st.session_state:
+    st.session_state.last_session_filter = None
 
 # =============================================================================
 # FUNCIONES AUXILIARES
@@ -58,10 +59,10 @@ def calcular_estado_actual(gap, limite_p75):
     else: return "Normal"
 
 # =============================================================================
-# CARGA DE DATOS (SOLO TARDE Y NOCHE)
+# CARGA DE DATOS (FLOTDO: SOLO T Y N)
 # =============================================================================
 @st.cache_data(ttl=300, show_spinner=False)
-def cargar_datos_florido(_ruta_csv):
+def cargar_datos_flotodo(_ruta_csv):
     if not os.path.exists(_ruta_csv):
         inicializar_archivo(_ruta_csv, ["Fecha", "Tipo_Sorteo", "Fijo"])
         return pd.DataFrame(columns=["Fecha", "Tipo_Sorteo", "Fijo"]), pd.DataFrame()
@@ -84,7 +85,7 @@ def cargar_datos_florido(_ruta_csv):
     df = df.dropna(subset=['Fecha']).copy()
     df['Fijo'] = pd.to_numeric(df['Fijo'], errors='coerce').fillna(0).astype(int)
     
-    # 🧹 Limpieza estricta de sesiones (Solo T y N)
+    # 🧹 Limpieza estricta para Flotodo (SOLO TARDE Y NOCHE)
     if 'Tipo_Sorteo' in df.columns:
         df['Tipo_Sorteo'] = df['Tipo_Sorteo'].astype(str).str.upper().str.strip()
         mapeo = {'TARDE': 'T', 'AFTERNOON': 'T', 'T': 'T', 'NOCHE': 'N', 'NIGHT': 'N', 'N': 'N'}
@@ -183,7 +184,7 @@ def analizar_estadisticas_digitos(df_fijos, fecha_ref):
 # =============================================================================
 def mostrar_ultimos_resultados_sidebar(df_full):
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📋 Últimos Resultados")
+    st.sidebar.subheader("📋 Últimos Resultados por Sesión")
     if df_full.empty:
         st.sidebar.info("ℹ️ Sin datos")
         return
@@ -212,16 +213,24 @@ def mostrar_tabla_comportamiento(df_stats):
         })
     st.dataframe(pd.DataFrame(filas), hide_index=True, use_container_width=True)
 
-def mostrar_estadistica_digitos(df_stats):
+def mostrar_tablas_separadas(df_stats):
     st.markdown("---")
-    st.subheader("📈 Estadística de Dígitos (Completa)")
-    if df_stats.empty:
-        st.info("ℹ️ Sin datos estadísticos.")
-        return
-    cols = ['Dígito', 'Tipo', 'Frecuencia', 'Veces Normal', 'Veces Vencido', 'Veces Muy Vencido', 
+    st.subheader("📈 Estadística de Dígitos (Separada por Posición)")
+    
+    df_dec = df_stats[df_stats['Tipo'] == 'Decena'].sort_values('Dígito').reset_index(drop=True)
+    df_uni = df_stats[df_stats['Tipo'] == 'Unidad'].sort_values('Dígito').reset_index(drop=True)
+    
+    cols = ['Dígito', 'Frecuencia', 'Veces Normal', 'Veces Vencido', 'Veces Muy Vencido', 
             'Estado Actual', 'Estabilidad', 'P75 (Límite)', 'Alerta', 'Gap Actual', 
             'Estado Última Salida', 'Estabilidad Última Salida', 'Exceso Última Salida']
-    st.dataframe(df_stats[cols].sort_values(['Tipo', 'Dígito'], ascending=[False, True]), hide_index=True, use_container_width=True)
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("#### 🔟 Decenas")
+        st.dataframe(df_dec[cols], hide_index=True, use_container_width=True)
+    with c2:
+        st.markdown("#### 1️⃣ Unidades")
+        st.dataframe(df_uni[cols], hide_index=True, use_container_width=True)
 
 def mostrar_alertas_detalladas(df_stats):
     df_alertas = df_stats[df_stats['Alerta'] == '⚠️ RECUPERAR'].copy()
@@ -269,21 +278,80 @@ def mostrar_alertas_detalladas(df_stats):
             if row['Exceso Última Salida'] > 0:
                 st.markdown(f"- Días en exceso: **+{row['Exceso Última Salida']} días**")
             st.markdown("---")
+def ordenador_numeros(df_stats):
+    st.markdown("---")
+    st.subheader("🔢 Ordenador de Números por Dígito")
+    st.caption("Ingresa números separados por comas o espacios. La app los ordenará según la presión estadística de sus dígitos.")
+    
+    df_stats_activo = df_stats if 'df_stats' in locals() else st.session_state.get('df_digitos_stats')
+    
+    if df_stats_activo is not None and not df_stats_activo.empty:
+        entrada = st.text_area("Números:", height=80, placeholder="12, 45, 08, 99...", key="input_nums")
+        
+        if st.button("🔄 Ordenar por Algoritmo", key="btn_ordenar", use_container_width=True):
+            if not entrada.strip():
+                st.warning("⚠️ Ingresa al menos un número.")
+                return
+                
+            nums = []
+            for n in entrada.replace(',', ' ').replace('\n', ' ').split():
+                n = n.strip()
+                if n.isdigit() and 0 <= int(n) <= 99:
+                    nums.append(int(n))
+            nums = sorted(list(set(nums)))
+            
+            if not nums:
+                st.error("❌ No se encontraron números válidos (00-99).")
+                return
+                
+            resultados = []
+            for num in nums:
+                dec, uni = num // 10, num % 10
+                row_dec = df_stats_activo[(df_stats_activo['Dígito'] == dec) & (df_stats_activo['Tipo'] == 'Decena')]
+                row_uni = df_stats_activo[(df_stats_activo['Dígito'] == uni) & (df_stats_activo['Tipo'] == 'Unidad')]
+                
+                if row_dec.empty or row_uni.empty: continue
+                r_dec, r_uni = row_dec.iloc[0], row_uni.iloc[0]
+                
+                score = 0
+                for r in [r_dec, r_uni]:
+                    if r['Porc_Comun'] >= 60: score += 100
+                    elif r['Porc_Comun'] >= 50: score += 70
+                    else: score += 40
+                    score += min(max((r['Gap Actual'] - r['P75 (Límite)']), 0) * 3, 30)
+                    score += r['Estabilidad'] * 0.25
+                    if r['Alerta'] == '⚠️ RECUPERAR': score += 20
+                score = round(score, 1)
+                
+                resultados.append({
+                    'Número': f"{num:02d}", 'Score': score,
+                    'Estado Dec': f"{r_dec['Dígito']} ({r_dec['Estado Actual']})",
+                    'Estado Uni': f"{r_uni['Dígito']} ({r_uni['Estado Actual']})"
+                })
+                
+            resultados.sort(key=lambda x: x['Score'], reverse=True)
+            st.success(f"✅ Ordenados {len(resultados)} números.")
+            st.dataframe(pd.DataFrame(resultados), hide_index=True, use_container_width=True)
+            
+            if len(resultados) >= 2:
+                st.info(f"🎯 **Recomendación:** Juega `{resultados[0]['Número']}` y `{resultados[1]['Número']}`")
+    else:
+        st.info("ℹ️ Ejecuta el análisis primero para activar el ordenador.")
+
 # =============================================================================
 # MAIN
 # =============================================================================
 def main():
-    st.sidebar.header("⚙️ Configuración Georgia")
+    st.sidebar.header("⚙️ Configuración Flotodo")
     
     # 🔄 BOTÓN DE FORZAR RECARGA
     if st.sidebar.button("🔄 Forzar Recarga / Actualizar CSV", type="primary", use_container_width=True):
         st.cache_data.clear()
         for key in list(st.session_state.keys()):
-            if key not in ['last_session_filter']:
-                del st.session_state[key]
+            del st.session_state[key]
         st.rerun()
 
-    modo_sesion = st.sidebar.radio("Sesión de Análisis:", ["General", "Mañana", "Tarde", "Noche"], key="radio_sesion")
+    modo_sesion = st.sidebar.radio("Sesión de Análisis:", ["General", "Tarde", "Noche"], key="radio_sesion")
     
     # ✅ DETECTAR CAMBIO DE SESIÓN Y LIMPIAR CACHE
     if modo_sesion != st.session_state.get('last_session_filter'):
@@ -292,20 +360,18 @@ def main():
         st.session_state.last_session_filter = modo_sesion
     
     # 1. Cargamos TODOS los datos primero
-    df_todo, df_full = cargar_datos_geotodo(RUTA_CSV)
+    df_todo, df_full = cargar_datos_flotodo(RUTA_CSV)
     st.session_state.df_full_cache = df_full
     
-    # 2. Sidebar: Muestra últimos resultados de M, T, N SIEMPRE
+    # 2. Sidebar: Muestra últimos resultados de T y N SIEMPRE
     mostrar_ultimos_resultados_sidebar(df_full) 
     
     if df_todo.empty:
-        st.warning("⚠️ Archivo vacío o sin datos válidos. Agrega sorteos a `Geotodo.csv`.")
+        st.warning("⚠️ Archivo vacío o sin datos válidos. Agrega sorteos a `Flotodo.csv`.")
         return
 
-    # 3. Filtrado estricto por sesión seleccionada
-    if modo_sesion == "Mañana":
-        df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'M'].copy()
-    elif modo_sesion == "Tarde":
+    # 3. Filtrado estricto por sesión seleccionada (SOLO T y N)
+    if modo_sesion == "Tarde":
         df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'T'].copy()
     elif modo_sesion == "Noche":
         df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'N'].copy()
@@ -318,13 +384,13 @@ def main():
     # 4. Botón de ejecución
     if st.button("🚀 Ejecutar Análisis de Dígitos", type="primary", key="btn_analisis"):
         if len(df_analisis) == 0:
-            st.error(f"❌ No hay datos para '{modo_sesion}'. Verifica que el CSV tenga sesiones válidas (M/T/N).")
+            st.error(f"❌ No hay datos para '{modo_sesion}'. Verifica que el CSV tenga 'T' o 'N'.")
             return
 
         with st.spinner("Calculando Gaps, P75 y Estados por dígito..."):
             df_stats = analizar_estadisticas_digitos(df_analisis, fecha_ref)
             
-            # 🧠 Guardar en memoria
+            # 🧠 Guardar en memoria para persistencia
             st.session_state.df_digitos_stats = df_stats
             st.session_state.df_analisis_cache = df_analisis
             
@@ -332,13 +398,17 @@ def main():
             mostrar_tabla_comportamiento(df_stats)
             mostrar_tablas_separadas(df_stats)
             mostrar_alertas_detalladas(df_stats)
+            ordenador_numeros(df_stats)
 
-    # 5. Recuperación de estado (si la app se reinicia tras interactuar)
+    # 5. Recuperación de estado (evita cierre al interactuar)
     elif st.session_state.df_digitos_stats is not None:
         df_stats = st.session_state.df_digitos_stats
+        df_analisis = st.session_state.get('df_analisis_cache', df_todo)
+        
         mostrar_tabla_comportamiento(df_stats)
         mostrar_tablas_separadas(df_stats)
         mostrar_alertas_detalladas(df_stats)
+        ordenador_numeros(df_stats)
     else:
         st.info("👈 Presiona 'Ejecutar Análisis de Dígitos' para comenzar.")
 
