@@ -360,33 +360,34 @@ def main():
 
     modo_sesion = st.sidebar.radio("Sesión de Análisis:", ["General", "Tarde", "Noche"], key="radio_sesion")
     
-    # ✅ DETECTAR CAMBIO DE SESIÓN Y LIMPIAR CACHE
+    # ✅ Detectar cambio de sesión y limpiar memoria
     if modo_sesion != st.session_state.get('last_session_filter'):
         st.session_state.df_digitos_stats = None
         st.session_state.df_analisis_cache = None
         st.session_state.last_session_filter = modo_sesion
     
-    # 1. Cargamos TODOS los datos primero
+    # 1. Cargar datos
     df_todo, df_full = cargar_datos_flotodo(RUTA_CSV)
     st.session_state.df_full_cache = df_full
     
-    # 2. Sidebar: Muestra últimos resultados de T y N SIEMPRE
+    # 2. Sidebar: Últimos resultados
     mostrar_ultimos_resultados_sidebar(df_full) 
     
     if df_todo.empty:
         st.warning("⚠️ Archivo vacío o sin datos válidos. Agrega sorteos a `Flotodo.csv`.")
         return
 
-        # 3. Filtrado estricto por sesión seleccionada (SOLO T y N)
+    # 3. Filtrado estricto (SOLO T y N)
     if modo_sesion == "Tarde":
         df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'T'].copy()
     elif modo_sesion == "Noche":
         df_analisis = df_todo[df_todo['Tipo_Sorteo'] == 'N'].copy()
-    else: # General
+    else:
         df_analisis = df_todo.copy()
         
-    # 🔍 DEBUG VISUAL
-    st.info(f"📊 Analizando **{len(df_analisis)}** sorteos para la sesión: **{modo_sesion}** (T={len(df_todo[df_todo['Tipo_Sorteo']=='T'])}, N={len(df_todo[df_todo['Tipo_Sorteo']=='N'])})")
+    # 🔥 CORRECCIÓN CRÍTICA: fecha_ref definida aquí, garantizada en scope
+    fecha_ref = datetime.now()
+    st.info(f"📊 Analizando **{len(df_analisis)}** sorteos para la sesión: **{modo_sesion}**")
 
     # 4. Botón de ejecución
     if st.button("🚀 Ejecutar Análisis de Dígitos", type="primary", key="btn_analisis"):
@@ -397,11 +398,11 @@ def main():
         with st.spinner("Calculando Gaps, P75 y Estados por dígito..."):
             df_stats = analizar_estadisticas_digitos(df_analisis, fecha_ref)
             
-            # 🧠 Guardar en memoria para persistencia
+            # 🧠 Guardar en memoria
             st.session_state.df_digitos_stats = df_stats
             st.session_state.df_analisis_cache = df_analisis
             
-            # Renderizado con tablas separadas
+            # Renderizado
             mostrar_tabla_comportamiento(df_stats)
             mostrar_tablas_separadas(df_stats)
             mostrar_alertas_detalladas(df_stats)
