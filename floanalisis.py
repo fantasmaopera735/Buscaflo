@@ -1,136 +1,139 @@
 import streamlit as st
 import pandas as pd
+import re
 import numpy as np
 from openpyxl import load_workbook
-from datetime import datetime, timedelta
-import re
+from datetime import datetime, timedelta, date
 import warnings
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="Análisis Inteligente FL Tarde", layout="wide")
+# ==========================================
+# 🎨 CONFIGURACIÓN DE PÁGINA
+# ==========================================
+st.set_page_config(page_title="Análisis Inteligente FL Tarde", page_icon="🍑", layout="wide")
 st.title("🧠 Análisis Inteligente - Florida Tarde")
 
 # ==========================================
-# 🔍 CARGA INTELIGENTE (Busca SOLO celdas ROJAS)
+# 📂 CONFIGURACIÓN DE ARCHIVOS
 # ==========================================
 ARCHIVO_ENTRADA = 'david esgrima.xlsx'
-HOJA_OBJETIVO = 'TARDE 1 (1)'
+HOJA_OBJETIVO = 'TARDE 1 (1)'  # Si no existe, usará la primera hoja automáticamente
 
+# ==========================================
+# 🔍 FUNCIÓN DE CARGA ROBUSTA (OpenPyXL)
+# ==========================================
 @st.cache_data(ttl=3600)
 def cargar_datos_desde_excel():
     try:
         wb = load_workbook(ARCHIVO_ENTRADA, data_only=True)
-        # Si la hoja no existe, toma la primera
         ws = wb[HOJA_OBJETIVO] if HOJA_OBJETIVO in wb.sheetnames else wb.active
         
-        fecha_regex = re.compile(r'(\d{2}[/\-\.]\d{2}[/\-\.]\d{2,4})')
-        resultados = []
+        datos = []
+        limite_fin = date(2027, 12, 31)  # Permitir fechas hasta 2027
+        limite_inicio = date(2010, 1, 1)
         
-        # Escanea toda la hoja buscando celdas con relleno rojo y fuente blanca
+        # Escanear toda la hoja buscando celdas con relleno ROJO
         for row in ws.iter_rows():
             for cell in row:
-                # Verificar color de relleno (rojo)
-                fill_rgb = getattr(cell.fill.start_color, 'rgb', None)
-                is_red = False
-                if fill_rgb:
-                    rgb_str = str(fill_rgb).upper()
-                    # OpenPyXL guarda rojo como FFFF0000 o similar
-                    if 'FF0000' in rgb_str or rgb_str.endswith('FF0000'):
-                        is_red = True
-                        
-                # Verificar color de fuente (blanca)
-                font_rgb = getattr(cell.font.color, 'rgb', None)
-                is_white = False
-                if font_rgb:
-                    font_str = str(font_rgb).upper()
-                    if 'FFFFFF' in font_str or font_str.endswith('FFFFFF'):
-                        is_white = True
+                # Verificar color de relleno (rojo estándar o tema)
+                fill_rgb = str(getattr(cell.fill.start_color, 'rgb', '') or '').upper()
+                is_red = 'FF0000' in fill_rgb or 'C00000' in fill_rgb or fill_rgb.endswith('FF0000')
                 
-                # Si cumple el formato rojo/blanco, extrae fecha
-                if is_red and is_white:
-                    val = str(cell.value).strip()
-                    match = fecha_regex.search(val)
+                if is_red:
+                    val = str(cell.value or '').strip()
+                    # Regex flexible: acepta 10/5/2026, 10-05-26, etc.
+                    match = re.search(r'(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{2,4})', val)
                     if match:
-                        fecha_str = match.group(1).replace('.', '/')
+                        d, m, a = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                        if a < 100: a += 2000
                         try:
-                            fecha = pd.to_datetime(fecha_str, dayfirst=True)
-                            
-                            # Buscar el número correspondiente (generalmente está abajo o a la derecha)
-                            num_val = None
-                            for offset_row, offset_col in [(1, 0), (0, 1), (1, 1)]:
-                                c = ws.cell(row=cell.row + offset_row, column=cell.column + offset_col)
-                                if c.value:
-                                    clean = str(c.value).upper().replace('O', '0').replace(' ', '').replace('HOY', '')
-                                    if clean.isdigit() and len(clean) >= 2:
-                                        num_val = int(clean[-2:])
-                                        break
-                                        
-                            if num_val is not None:
-                                resultados.append({'Fecha': fecha, 'Numero': num_val})
-                        except: pass
-                        
-        df = pd.DataFrame(resultados).drop_duplicates(subset='Fecha').sort_values('Fecha').reset_index(drop=True)
-        wb.close()
+                            fecha_dt = datetime(a, m, d)
+                            fecha = fecha_dt.date()
+                            if limite_inicio <= fecha <= limite_fin:
+                                # Buscar el número en la celda de JUSTO ABAJO
+                                celda_num = ws.cell(row=cell.row + 1, column=cell.column)
+                                num_raw = str(celda_num.value or '').upper().replace('O', '0').replace(' ', '').replace('ERROR:#N/A', '')
+                                
+                                if num_raw.isdigit() and len(num_raw) >= 2:
+                                    fijo = int(num_raw[-2:])  # Tu regla: últimos 2 dígitos
+                                    datos.append({
+                                        'Fecha': fecha_dt, 
+                                        'Numero': fijo, 
+                                        'Celda': cell.coordinate
+                                    })
+                        except: 
+                            continue
         
-        if df.empty:
-            return None, "⚠️ No se encontraron celdas con formato rojo/blanco. Verifica el Excel."
+        if not datos:
+            return None, "⚠️ No se encontraron celdas ROJAS con fecha válida. Verifica que las fechas tengan relleno rojo y letra blanca."
             
-        return df, f"✅ {len(df)} sorteos cargados desde celdas resaltadas."
+        # Ordenar y eliminar duplicados
+        df = pd.DataFrame(datos).drop_duplicates(subset='Fecha').sort_values('Fecha').reset_index(drop=True)
+        ultima_fecha = df['Fecha'].max()
+        celda_ultima = df[df['Fecha'] == ultima_fecha]['Celda'].iloc[0]
+        
+        wb.close()
+        return df, f"✅ {len(df)} sorteos cargados. Última fecha: `{ultima_fecha.strftime('%d/%m/%Y')}` (Celda: `{celda_ultima}`)"
         
     except Exception as e:
         return None, f"❌ Error leyendo Excel: {e}"
 
-df_fijos, msg = cargar_datos_desde_excel()
-if df_fijos is None:
+# ==========================================
+# 🚀 EJECUCIÓN INICIAL
+# ==========================================
+df, msg = cargar_datos_desde_excel()
+if df is None:
     st.error(msg)
+    with st.expander("🔍 Diagnóstico rápido"):
+        st.info("1. Verifica que `david esgrima.xlsx` esté en la carpeta raíz del repositorio.\n"
+                "2. Asegúrate de que `openpyxl` esté en `requirements.txt`.\n"
+                "3. Comprueba que las fechas tengan formato de celda `Relleno: Rojo` y `Fuente: Blanco`.")
     st.stop()
 st.success(msg)
 
 # ==========================================
-# 📊 DETECCIÓN DE FECHA BASE Y PROYECCIÓN
+# 📊 CÁLCULO DE MÉTRICAS Y PROYECCIÓN
 # ==========================================
-fecha_base = df_fijos['Fecha'].max()
-dia_objetivo = fecha_base + timedelta(days=1)
-nombre_dia = dia_objetivo.day_name()
+fecha_base = df['Fecha'].max()
+dia_objetivo = fecha_base + pd.Timedelta(days=1)
+nombre_dia = dia_objetivo.strftime('%A')
 
-st.info(f"📅 Última fecha válida detectada: `{fecha_base.strftime('%d/%m/%Y')}`")
+st.info(f"📅 Fecha base detectada: `{fecha_base.strftime('%d/%m/%Y')}`")
 st.info(f"🎯 Próximo sorteo proyectado: **{dia_objetivo.strftime('%d/%m/%Y')} ({nombre_dia})**")
 
-# ==========================================
-# 🧠 LÓGICA DE ANÁLISIS (Tu metodología)
-# ==========================================
-df_fijos['Decena'] = (df_fijos['Numero'] // 10).astype(int)
-df_fijos['Terminacion'] = (df_fijos['Numero'] % 10).astype(int)
-df_fijos['Suma'] = df_fijos['Numero'].apply(lambda x: (x//10) + (x%10))
-df_fijos['DiaSemana'] = df_fijos['Fecha'].dt.day_name()
+# Columnas base
+df['Decena'] = (df['Numero'] // 10).astype(int)
+df['Terminacion'] = (df['Numero'] % 10).astype(int)
+df['Suma'] = df['Numero'].apply(lambda x: (x//10) + (x%10))
+df['DiaSemana'] = df['Fecha'].dt.day_name()
 
+# Cálculo de puntuación para los 100 números
 resultados = []
 for n in range(0, 100):
-    dec = n // 10
-    ter = n % 10
+    dec, ter = n // 10, n % 10
     
     # 1. Separación (Gap) desde última aparición
-    apariciones = df_fijos[df_fijos['Numero'] == n]['Fecha']
+    apariciones = df[df['Numero'] == n]['Fecha']
     gap = (fecha_base - apariciones.max()).days if not apariciones.empty else 999
     
     # 2. Tendencia escalonada (últimas 3 decenas)
-    ultimas_dec = df_fijos.tail(3)['Decena'].tolist()
+    ultimas_dec = df.tail(3)['Decena'].tolist()
     tendencia = 0
     if len(ultimas_dec) == 3:
         if ultimas_dec[0] < ultimas_dec[1] < ultimas_dec[2] and dec == ultimas_dec[2] + 1: tendencia = 15
         elif ultimas_dec[0] > ultimas_dec[1] > ultimas_dec[2] and dec == ultimas_dec[2] - 1: tendencia = 15
             
-    # 3. Frecuencia histórica en este día (últimos 6 meses)
-    hace_180 = fecha_base - timedelta(days=180)
-    freq_dia = len(df_fijos[(df_fijos['Fecha'] >= hace_180) & (df_fijos['DiaSemana'] == nombre_dia) & (df_fijos['Numero'] == n)])
+    # 3. Frecuencia histórica en este día de la semana (últimos 6 meses)
+    hace_180 = fecha_base - pd.Timedelta(days=180)
+    freq_dia = len(df[(df['Fecha'] >= hace_180) & (df['DiaSemana'] == nombre_dia) & (df['Numero'] == n)])
     
-    # 4. Fórmula de Puntuación
+    # 4. Fórmula de Puntuación (Ajustable según tu experiencia)
     pts = 0
-    if 20 <= gap <= 45: pts += 20
-    elif gap > 45: pts += 10
-    pts += tendencia
-    if freq_dia >= 3: pts += 12
-    if 8 <= (dec + ter) <= 14: pts += 5
+    if 20 <= gap <= 45: pts += 20      # Zona dulce de separación
+    elif gap > 45: pts += 10           # Presión alta
+    pts += tendencia                   # Tendencia de decena
+    if freq_dia >= 3: pts += 12        # Día fuerte
+    if 8 <= (dec + ter) <= 14: pts += 5 # Suma en rango frecuente
     
     resultados.append({
         'Numero': n, 'Decena': dec, 'Terminacion': ter, 
@@ -152,12 +155,12 @@ with col1:
     st.dataframe(df_scores.head(10), use_container_width=True, hide_index=True)
 
 with col2:
-    st.subheader("📊 Resumen")
+    st.subheader("📊 Resumen del Modelo")
     st.metric("🔴 JUGAR", len(df_scores[df_scores['Estado']=='🔴 JUGAR']))
     st.metric("🟡 OBSERVAR", len(df_scores[df_scores['Estado']=='🟡 OBSERVAR']))
     st.metric("📅 Proyección", f"{dia_objetivo.strftime('%A %d/%m')}")
 
 st.divider()
-if st.button("📥 Descargar Excel con análisis completo"):
+if st.button("📥 Descargar Excel con análisis completo", use_container_width=True):
     df_scores.to_excel('Prediccion_Inteligente_FL_Tarde.xlsx', index=False)
-    st.success("✅ `Prediccion_Inteligente_FL_Tarde.xlsx` generado.")
+    st.success("✅ `Prediccion_Inteligente_FL_Tarde.xlsx` generado en la carpeta raíz.")
