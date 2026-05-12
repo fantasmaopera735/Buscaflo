@@ -1,36 +1,49 @@
+import streamlit as st
 import pandas as pd
-import numpy as np
 import re
+import numpy as np
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
+st.set_page_config(page_title="Análisis Inteligente FL Tarde", layout="wide")
+st.title("🧠 Análisis Inteligente - Florida Tarde")
+
 # ==========================================
-# 📂 CONFIGURACIÓN AUTOMÁTICA
+# 📂 CONFIGURACIÓN
 # ==========================================
 ARCHIVO_ENTRADA = 'david esgrima.xlsx'
-HOJA_OBJETIVO = 'TARDE 1 (1)'  # Si cambia, el script usa la primera hoja por defecto
-ARCHIVO_SALIDA = 'Prediccion_Inteligente_FL_Tarde.xlsx'
+HOJA_OBJETIVO = 'TARDE 1 (1)'
 
 # ==========================================
-# 🔍 1. LECTURA Y PARSING INTELIGENTE
+# 🔍 1. CARGA SEGURA CON DEPURACIÓN
 # ==========================================
-print("⏳ Leyendo archivo Excel y detectando estructura...")
-try:
-    df_raw = pd.read_excel(ARCHIVO_ENTRADA, sheet_name=HOJA_OBJETIVO, header=None)
-except Exception:
-    print(f"⚠️ Hoja '{HOJA_OBJETIVO}' no encontrada. Usando la primera hoja disponible.")
-    df_raw = pd.read_excel(ARCHIVO_ENTRADA, header=None)
+@st.cache_data
+def cargar_datos():
+    try:
+        df_raw = pd.read_excel(ARCHIVO_ENTRADA, sheet_name=HOJA_OBJETIVO, header=None)
+        st.success(f"✅ Archivo cargado. Forma: {df_raw.shape}")
+        return df_raw
+    except Exception as e:
+        st.error(f"❌ No se pudo leer el Excel: {e}")
+        return None
 
-# Parsear formato horizontal (Fechas arriba, Números abajo)
+df_raw = cargar_datos()
+if df_raw is None:
+    st.stop()
+
+# ==========================================
+# 🧩 2. PARSER ROBUSTO (Busca fecha + número en cualquier celda)
+# ==========================================
 datos_limpios = []
 rows, cols = df_raw.shape
 
-for r in range(rows - 1):
+# Recorremos todo el grid buscando pares fecha-número
+for r in range(rows):
     for c in range(cols):
-        celda = str(df_raw.iloc[r, c]).strip()
-        # Buscar patrón de fecha (DD/MM/YYYY o DD-MM-YYYY)
-        fecha_match = re.search(r'(\d{2}[/\-\.]\d{2}[/\-\.]\d{2,4})', celda)
+        val = str(df_raw.iloc[r, c]).strip()
+        # 1. Buscar fecha DD/MM/AAAA o DD-MM-AAAA
+        fecha_match = re.search(r'(\d{2}[/\-\.]\d{2}[/\-\.]\d{2,4})', val)
         if fecha_match:
             fecha_str = fecha_match.group(1).replace('-', '/').replace('.', '/')
             try:
@@ -41,70 +54,73 @@ for r in range(rows - 1):
                 except:
                     continue
 
-            # Buscar número en la celda de abajo
-            num_raw = str(df_raw.iloc[r+1, c]).strip().upper().replace('O', '0').replace(' ', '')
-            if num_raw.isdigit() and len(num_raw) >= 2:
-                # Tu regla: si es 428, cogemos 28
-                numero = int(num_raw[-2:]) 
-                datos_limpios.append({'Fecha': fecha, 'Numero': numero})
+            # 2. Buscar número en celdas cercanas (misma fila, siguiente columna o fila siguiente)
+            candidatos = []
+            if c + 1 < cols: candidatos.append(str(df_raw.iloc[r, c+1]).strip())
+            if r + 1 < rows: candidatos.append(str(df_raw.iloc[r+1, c]).strip())
+            
+            for cand in candidatos:
+                cand = cand.upper().replace('O', '0').replace(' ', '').replace('ERROR:#N/A', '')
+                if cand.isdigit() and len(cand) >= 2:
+                    num = int(cand[-2:]) # Tu regla: coger últimos 2 dígitos
+                    datos_limpios.append({'Fecha': fecha, 'Numero': num})
+                    break # Ya encontramos el número para esta fecha, pasar a la siguiente
 
 df = pd.DataFrame(datos_limpios).drop_duplicates(subset='Fecha').sort_values('Fecha').reset_index(drop=True)
 
 if df.empty:
-    print("❌ No se encontraron fechas/números válidos en el archivo.")
-    exit()
+    st.warning("⚠️ No se encontraron pares fecha-número válidos. Revisa la estructura del Excel.")
+    with st.expander("👁️ Ver primeras celdas del Excel para depurar"):
+        st.dataframe(df_raw.head(5), use_container_width=True)
+    st.stop()
 
-print(f"✅ Datos cargados: {len(df)} sorteos analizados.")
+st.success(f"📊 {len(df)} sorteos válidos detectados.")
 
 # ==========================================
-# 📊 2. MÉTRICAS BASE
+# 📈 3. CÁLCULO DE MÉTRICAS Y PROYECCIÓN
 # ==========================================
 df['Decena'] = (df['Numero'] // 10).astype(int)
 df['Terminacion'] = (df['Numero'] % 10).astype(int)
 df['Suma'] = df['Numero'].apply(lambda x: (x//10) + (x%10))
 df['DiaSemana'] = df['Fecha'].dt.day_name()
 
-# Detectar fecha más reciente y calcular día siguiente
 fecha_base = df['Fecha'].max()
 dia_objetivo = fecha_base + timedelta(days=1)
 nombre_dia = dia_objetivo.day_name()
 
-print(f"📅 Fecha base detectada: {fecha_base.strftime('%d/%m/%Y')}")
-print(f"🎯 Proyección para: {dia_objetivo.strftime('%d/%m/%Y')} ({nombre_dia})")
+st.info(f"📅 Última fecha en datos: `{fecha_base.strftime('%d/%m/%Y')}` → Proyectando para: **{dia_objetivo.strftime('%d/%m/%Y')} ({nombre_dia})**")
 
 # ==========================================
-# 🧠 3. ANÁLISIS INTELIGENTE (TU METODOLOGÍA)
+# 🧠 4. SISTEMA DE PUNTOS (TU METODOLOGÍA)
 # ==========================================
 resultados = []
 for n in range(0, 100):
     dec = n // 10
     ter = n % 10
     
-    # 1. Separación (Gap) desde última aparición
     apariciones = df[df['Numero'] == n]['Fecha']
     gap = (fecha_base - apariciones.max()).days if not apariciones.empty else 999
     
-    # 2. Tendencia de Decena (Ascendente/Descendente en últimos 3 sorteos)
+    # Tendencia escalonada simple
     ultimas_dec = df.tail(3)['Decena'].tolist()
     tendencia = 0
     if len(ultimas_dec) == 3:
         if ultimas_dec[0] < ultimas_dec[1] < ultimas_dec[2] and dec == ultimas_dec[2] + 1:
-            tendencia = 15  # Escalón ascendente
+            tendencia = 15
         elif ultimas_dec[0] > ultimas_dec[1] > ultimas_dec[2] and dec == ultimas_dec[2] - 1:
-            tendencia = 15  # Escalón descendente
+            tendencia = 15
             
-    # 3. Frecuencia histórica en este día de la semana (últimos 6 meses)
-    hace_180_dias = fecha_base - timedelta(days=180)
-    hist_dia = df[(df['Fecha'] >= hace_180_dias) & (df['DiaSemana'] == nombre_dia)]['Numero']
-    freq_dia = list(hist_dia).count(n)
+    # Frecuencia en este día (últimos 6 meses)
+    hace_180 = fecha_base - timedelta(days=180)
+    freq_dia = len(df[(df['Fecha'] >= hace_180) & (df['DiaSemana'] == nombre_dia) & (df['Numero'] == n)])
     
-    # 4. Fórmula de Puntuación (Ajustable)
+    # Fórmula
     pts = 0
-    if 20 <= gap <= 45: pts += 20      # Zona dulce de separación
-    elif gap > 45: pts += 10           # Presión alta
-    pts += tendencia                   # Tendencia de decena
-    if freq_dia >= 3: pts += 12        # Día fuerte
-    if 8 <= (dec + ter) <= 14: pts += 5 # Suma en rango frecuente
+    if 20 <= gap <= 45: pts += 20
+    elif gap > 45: pts += 10
+    pts += tendencia
+    if freq_dia >= 3: pts += 12
+    if 8 <= (dec + ter) <= 14: pts += 5
     
     resultados.append({
         'Numero': n, 'Decena': dec, 'Terminacion': ter, 
@@ -118,29 +134,20 @@ df_scores['Estado'] = df_scores['Puntaje'].apply(
 df_scores = df_scores.sort_values('Puntaje', ascending=False).reset_index(drop=True)
 
 # ==========================================
-# 💾 4. EXPORTACIÓN Y REPORTE
+# 💾 5. RENDERIZADO EN STREAMLIT
 # ==========================================
-with pd.ExcelWriter(ARCHIVO_SALIDA, engine='openpyxl') as writer:
-    # Hoja 1: Top 30 Proyección
-    df_scores.head(30).to_excel(writer, sheet_name='Top_30_Proyeccion', index=False)
-    
-    # Hoja 2: Configuración detectada
-    meta = pd.DataFrame([
-        ['Archivo Fuente', ARCHIVO_ENTRADA],
-        ['Fecha Base', fecha_base.strftime('%d/%m/%Y')],
-        ['Día Proyección', dia_objetivo.strftime('%d/%m/%Y')],
-        ['Nombre Día', nombre_dia],
-        ['Registros Analizados', len(df)],
-        ['Criterio Zona Dulce', 'Gap 20-45 días'],
-        ['Criterio Tendencia', 'Escalón Decena ±1'],
-        ['Criterio Día Fuerte', '≥3 apariciones últimos 180d']
-    ], columns=['Parametro', 'Valor'])
-    meta.to_excel(writer, sheet_name='Configuracion', index=False)
+col1, col2 = st.columns([2, 1])
+with col1:
+    st.subheader("🏆 Top 10 Proyección")
+    st.dataframe(df_scores.head(10), use_container_width=True, hide_index=True)
 
-print("\n" + "="*40)
-print("🎉 ANÁLISIS COMPLETADO CON ÉXITO")
-print("="*40)
-print(f"📁 Archivo generado: {ARCHIVO_SALIDA}")
-print("\n🔥 TOP 5 RECOMENDADOS PARA MAÑANA:")
-print(df_scores.head(5)[['Numero', 'Decena', 'Terminacion', 'Gap', 'Tendencia', 'Freq_Dia', 'Puntaje', 'Estado']].to_string(index=False))
-print("\n💡 Nota: Abre el Excel para ver el desglose completo y ajustar pesos si es necesario.")
+with col2:
+    st.subheader("📊 Resumen")
+    st.metric("🔴 JUGAR", len(df_scores[df_scores['Estado']=='🔴 JUGAR']))
+    st.metric("🟡 OBSERVAR", len(df_scores[df_scores['Estado']=='🟡 OBSERVAR']))
+    st.metric("📅 Proyección", f"{dia_objetivo.strftime('%A %d/%m')}")
+
+st.divider()
+if st.button("📥 Descargar Excel con análisis completo"):
+    df_scores.to_excel('Prediccion_Inteligente_FL_Tarde.xlsx', index=False)
+    st.success("✅ `Prediccion_Inteligente_FL_Tarde.xlsx` generado en la carpeta raíz.")
