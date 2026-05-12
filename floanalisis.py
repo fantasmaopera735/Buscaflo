@@ -9,13 +9,20 @@ st.set_page_config(page_title="Análisis Flotodo", page_icon="🌺", layout="wid
 st.title("🌺 Análisis Inteligente - Florida (Tarde / Noche)")
 
 # ==========================================
-# 📂 CARGA AUTOMÁTICA DESDE EL REPOSITORIO
+# 📂 CARGA AUTOMÁTICA DEL ARCHIVO
 # ==========================================
 ARCHIVO_CSV = "Flotodo.csv"
 
 try:
-    # utf-8-sig maneja el BOM que Excel a veces agrega al exportar CSV
-    df_raw = pd.read_csv(ARCHIVO_CSV, sep=';', encoding='utf-8-sig', parse_dates=['Fecha'], dayfirst=True)
+    # header=None + names=[] evita KeyError cuando el CSV no tiene fila de títulos
+    df_raw = pd.read_csv(
+        ARCHIVO_CSV, 
+        sep=';', 
+        encoding='utf-8-sig',
+        header=None,
+        names=['Fecha', 'Tipo_Sorteo', 'Centena', 'Fijo', '1er_Corrido', '2do_Corrido'],
+        dayfirst=True
+    )
 except FileNotFoundError:
     st.error(f"❌ No se encontró `{ARCHIVO_CSV}` en el repositorio.")
     st.info("💡 Asegúrate de que el archivo esté en la raíz del repo y se llame exactamente `Flotodo.csv`")
@@ -27,16 +34,13 @@ except Exception as e:
 # ==========================================
 # 🧹 LIMPIEZA Y VALIDACIÓN
 # ==========================================
-# Normalizar columna de tipo de sorteo
 df_raw['Tipo_Sorteo'] = df_raw['Tipo_Sorteo'].astype(str).str.strip().str.upper()
-
-# Filtrar solo T y N
 df_valido = df_raw[df_raw['Tipo_Sorteo'].isin(['T', 'N'])].copy()
+
 if df_valido.empty:
     st.error("⚠️ No hay sorteos de Tarde (T) o Noche (N) en el archivo.")
     st.stop()
 
-# Asegurar que Fijo sea numérico y tomar últimos 2 dígitos
 df_valido['Fijo'] = pd.to_numeric(df_valido['Fijo'], errors='coerce') % 100
 df_valido = df_valido.dropna(subset=['Fecha', 'Fijo']).sort_values('Fecha').reset_index(drop=True)
 
@@ -55,7 +59,7 @@ else:
     dfa = df_valido.copy()
 
 if dfa.empty:
-    st.warning(f"⚠️ No hay datos para: {modo}")
+    st.warning(f"⚠️ No hay datos disponibles para: {modo}")
     st.stop()
 
 # ==========================================
@@ -66,11 +70,13 @@ dfa['Decena'] = (dfa['Fijo'] // 10).astype(int)
 dfa['Terminacion'] = (dfa['Fijo'] % 10).astype(int)
 dfa['DiaSemana'] = dfa['Fecha'].dt.day_name()
 
+dia_objetivo = (fecha_base + timedelta(days=1)).day_name()
+
 resultados = []
 for n in range(0, 100):
     dec, ter = n // 10, n % 10
     
-    # 1. Separación (Gap)
+    # 1. Separación (Gap) desde última aparición
     apariciones = dfa[dfa['Fijo'] == n]['Fecha']
     gap = (fecha_base - apariciones.max()).days if not apariciones.empty else 999
     
@@ -82,17 +88,16 @@ for n in range(0, 100):
         elif ultimas_dec[0] > ultimas_dec[1] > ultimas_dec[2] and dec == ultimas_dec[2] - 1: tendencia = 15
             
     # 3. Frecuencia en el día objetivo (últimos 6 meses)
-    dia_objetivo = (fecha_base + timedelta(days=1)).day_name()
     hace_180 = fecha_base - timedelta(days=180)
     freq_dia = len(dfa[(dfa['Fecha'] >= hace_180) & (dfa['DiaSemana'] == dia_objetivo) & (dfa['Fijo'] == n)])
     
     # 4. Fórmula de Puntuación
     pts = 0
-    if 20 <= gap <= 45: pts += 20
-    elif gap > 45: pts += 10
-    pts += tendencia
-    if freq_dia >= 3: pts += 12
-    if 8 <= (dec + ter) <= 14: pts += 5
+    if 20 <= gap <= 45: pts += 20      # Zona dulce
+    elif gap > 45: pts += 10           # Presión alta
+    pts += tendencia                   # Tendencia
+    if freq_dia >= 3: pts += 12        # Día fuerte
+    if 8 <= (dec + ter) <= 14: pts += 5 # Suma frecuente
     
     resultados.append({
         'Numero': n, 'Decena': dec, 'Terminacion': ter, 
