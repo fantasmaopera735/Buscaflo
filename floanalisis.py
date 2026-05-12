@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
-import re
 import numpy as np
+from openpyxl import load_workbook
 from datetime import datetime, timedelta
+import re
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -10,111 +11,120 @@ st.set_page_config(page_title="Análisis Inteligente FL Tarde", layout="wide")
 st.title("🧠 Análisis Inteligente - Florida Tarde")
 
 # ==========================================
-# 📂 CONFIGURACIÓN
+# 🔍 CARGA INTELIGENTE (Busca SOLO celdas ROJAS)
 # ==========================================
 ARCHIVO_ENTRADA = 'david esgrima.xlsx'
 HOJA_OBJETIVO = 'TARDE 1 (1)'
 
-# ==========================================
-# 🔍 1. CARGA SEGURA CON DEPURACIÓN
-# ==========================================
-@st.cache_data
-def cargar_datos():
+@st.cache_data(ttl=3600)
+def cargar_datos_desde_excel():
     try:
-        df_raw = pd.read_excel(ARCHIVO_ENTRADA, sheet_name=HOJA_OBJETIVO, header=None)
-        st.success(f"✅ Archivo cargado. Forma: {df_raw.shape}")
-        return df_raw
-    except Exception as e:
-        st.error(f"❌ No se pudo leer el Excel: {e}")
-        return None
-
-df_raw = cargar_datos()
-if df_raw is None:
-    st.stop()
-
-# ==========================================
-# 🧩 2. PARSER ROBUSTO (Busca fecha + número en cualquier celda)
-# ==========================================
-datos_limpios = []
-rows, cols = df_raw.shape
-
-# Recorremos todo el grid buscando pares fecha-número
-for r in range(rows):
-    for c in range(cols):
-        val = str(df_raw.iloc[r, c]).strip()
-        # 1. Buscar fecha DD/MM/AAAA o DD-MM-AAAA
-        fecha_match = re.search(r'(\d{2}[/\-\.]\d{2}[/\-\.]\d{2,4})', val)
-        if fecha_match:
-            fecha_str = fecha_match.group(1).replace('-', '/').replace('.', '/')
-            try:
-                fecha = pd.to_datetime(fecha_str, format='%d/%m/%Y')
-            except:
-                try:
-                    fecha = pd.to_datetime(fecha_str, format='%d/%m/%y')
-                except:
-                    continue
-
-            # 2. Buscar número en celdas cercanas (misma fila, siguiente columna o fila siguiente)
-            candidatos = []
-            if c + 1 < cols: candidatos.append(str(df_raw.iloc[r, c+1]).strip())
-            if r + 1 < rows: candidatos.append(str(df_raw.iloc[r+1, c]).strip())
+        wb = load_workbook(ARCHIVO_ENTRADA, data_only=True)
+        # Si la hoja no existe, toma la primera
+        ws = wb[HOJA_OBJETIVO] if HOJA_OBJETIVO in wb.sheetnames else wb.active
+        
+        fecha_regex = re.compile(r'(\d{2}[/\-\.]\d{2}[/\-\.]\d{2,4})')
+        resultados = []
+        
+        # Escanea toda la hoja buscando celdas con relleno rojo y fuente blanca
+        for row in ws.iter_rows():
+            for cell in row:
+                # Verificar color de relleno (rojo)
+                fill_rgb = getattr(cell.fill.start_color, 'rgb', None)
+                is_red = False
+                if fill_rgb:
+                    rgb_str = str(fill_rgb).upper()
+                    # OpenPyXL guarda rojo como FFFF0000 o similar
+                    if 'FF0000' in rgb_str or rgb_str.endswith('FF0000'):
+                        is_red = True
+                        
+                # Verificar color de fuente (blanca)
+                font_rgb = getattr(cell.font.color, 'rgb', None)
+                is_white = False
+                if font_rgb:
+                    font_str = str(font_rgb).upper()
+                    if 'FFFFFF' in font_str or font_str.endswith('FFFFFF'):
+                        is_white = True
+                
+                # Si cumple el formato rojo/blanco, extrae fecha
+                if is_red and is_white:
+                    val = str(cell.value).strip()
+                    match = fecha_regex.search(val)
+                    if match:
+                        fecha_str = match.group(1).replace('.', '/')
+                        try:
+                            fecha = pd.to_datetime(fecha_str, dayfirst=True)
+                            
+                            # Buscar el número correspondiente (generalmente está abajo o a la derecha)
+                            num_val = None
+                            for offset_row, offset_col in [(1, 0), (0, 1), (1, 1)]:
+                                c = ws.cell(row=cell.row + offset_row, column=cell.column + offset_col)
+                                if c.value:
+                                    clean = str(c.value).upper().replace('O', '0').replace(' ', '').replace('HOY', '')
+                                    if clean.isdigit() and len(clean) >= 2:
+                                        num_val = int(clean[-2:])
+                                        break
+                                        
+                            if num_val is not None:
+                                resultados.append({'Fecha': fecha, 'Numero': num_val})
+                        except: pass
+                        
+        df = pd.DataFrame(resultados).drop_duplicates(subset='Fecha').sort_values('Fecha').reset_index(drop=True)
+        wb.close()
+        
+        if df.empty:
+            return None, "⚠️ No se encontraron celdas con formato rojo/blanco. Verifica el Excel."
             
-            for cand in candidatos:
-                cand = cand.upper().replace('O', '0').replace(' ', '').replace('ERROR:#N/A', '')
-                if cand.isdigit() and len(cand) >= 2:
-                    num = int(cand[-2:]) # Tu regla: coger últimos 2 dígitos
-                    datos_limpios.append({'Fecha': fecha, 'Numero': num})
-                    break # Ya encontramos el número para esta fecha, pasar a la siguiente
+        return df, f"✅ {len(df)} sorteos cargados desde celdas resaltadas."
+        
+    except Exception as e:
+        return None, f"❌ Error leyendo Excel: {e}"
 
-df = pd.DataFrame(datos_limpios).drop_duplicates(subset='Fecha').sort_values('Fecha').reset_index(drop=True)
-
-if df.empty:
-    st.warning("⚠️ No se encontraron pares fecha-número válidos. Revisa la estructura del Excel.")
-    with st.expander("👁️ Ver primeras celdas del Excel para depurar"):
-        st.dataframe(df_raw.head(5), use_container_width=True)
+df_fijos, msg = cargar_datos_desde_excel()
+if df_fijos is None:
+    st.error(msg)
     st.stop()
-
-st.success(f"📊 {len(df)} sorteos válidos detectados.")
+st.success(msg)
 
 # ==========================================
-# 📈 3. CÁLCULO DE MÉTRICAS Y PROYECCIÓN
+# 📊 DETECCIÓN DE FECHA BASE Y PROYECCIÓN
 # ==========================================
-df['Decena'] = (df['Numero'] // 10).astype(int)
-df['Terminacion'] = (df['Numero'] % 10).astype(int)
-df['Suma'] = df['Numero'].apply(lambda x: (x//10) + (x%10))
-df['DiaSemana'] = df['Fecha'].dt.day_name()
-
-fecha_base = df['Fecha'].max()
+fecha_base = df_fijos['Fecha'].max()
 dia_objetivo = fecha_base + timedelta(days=1)
 nombre_dia = dia_objetivo.day_name()
 
-st.info(f"📅 Última fecha en datos: `{fecha_base.strftime('%d/%m/%Y')}` → Proyectando para: **{dia_objetivo.strftime('%d/%m/%Y')} ({nombre_dia})**")
+st.info(f"📅 Última fecha válida detectada: `{fecha_base.strftime('%d/%m/%Y')}`")
+st.info(f"🎯 Próximo sorteo proyectado: **{dia_objetivo.strftime('%d/%m/%Y')} ({nombre_dia})**")
 
 # ==========================================
-# 🧠 4. SISTEMA DE PUNTOS (TU METODOLOGÍA)
+# 🧠 LÓGICA DE ANÁLISIS (Tu metodología)
 # ==========================================
+df_fijos['Decena'] = (df_fijos['Numero'] // 10).astype(int)
+df_fijos['Terminacion'] = (df_fijos['Numero'] % 10).astype(int)
+df_fijos['Suma'] = df_fijos['Numero'].apply(lambda x: (x//10) + (x%10))
+df_fijos['DiaSemana'] = df_fijos['Fecha'].dt.day_name()
+
 resultados = []
 for n in range(0, 100):
     dec = n // 10
     ter = n % 10
     
-    apariciones = df[df['Numero'] == n]['Fecha']
+    # 1. Separación (Gap) desde última aparición
+    apariciones = df_fijos[df_fijos['Numero'] == n]['Fecha']
     gap = (fecha_base - apariciones.max()).days if not apariciones.empty else 999
     
-    # Tendencia escalonada simple
-    ultimas_dec = df.tail(3)['Decena'].tolist()
+    # 2. Tendencia escalonada (últimas 3 decenas)
+    ultimas_dec = df_fijos.tail(3)['Decena'].tolist()
     tendencia = 0
     if len(ultimas_dec) == 3:
-        if ultimas_dec[0] < ultimas_dec[1] < ultimas_dec[2] and dec == ultimas_dec[2] + 1:
-            tendencia = 15
-        elif ultimas_dec[0] > ultimas_dec[1] > ultimas_dec[2] and dec == ultimas_dec[2] - 1:
-            tendencia = 15
+        if ultimas_dec[0] < ultimas_dec[1] < ultimas_dec[2] and dec == ultimas_dec[2] + 1: tendencia = 15
+        elif ultimas_dec[0] > ultimas_dec[1] > ultimas_dec[2] and dec == ultimas_dec[2] - 1: tendencia = 15
             
-    # Frecuencia en este día (últimos 6 meses)
+    # 3. Frecuencia histórica en este día (últimos 6 meses)
     hace_180 = fecha_base - timedelta(days=180)
-    freq_dia = len(df[(df['Fecha'] >= hace_180) & (df['DiaSemana'] == nombre_dia) & (df['Numero'] == n)])
+    freq_dia = len(df_fijos[(df_fijos['Fecha'] >= hace_180) & (df_fijos['DiaSemana'] == nombre_dia) & (df_fijos['Numero'] == n)])
     
-    # Fórmula
+    # 4. Fórmula de Puntuación
     pts = 0
     if 20 <= gap <= 45: pts += 20
     elif gap > 45: pts += 10
@@ -134,7 +144,7 @@ df_scores['Estado'] = df_scores['Puntaje'].apply(
 df_scores = df_scores.sort_values('Puntaje', ascending=False).reset_index(drop=True)
 
 # ==========================================
-# 💾 5. RENDERIZADO EN STREAMLIT
+# 💾 RENDERIZADO EN STREAMLIT
 # ==========================================
 col1, col2 = st.columns([2, 1])
 with col1:
@@ -150,4 +160,4 @@ with col2:
 st.divider()
 if st.button("📥 Descargar Excel con análisis completo"):
     df_scores.to_excel('Prediccion_Inteligente_FL_Tarde.xlsx', index=False)
-    st.success("✅ `Prediccion_Inteligente_FL_Tarde.xlsx` generado en la carpeta raíz.")
+    st.success("✅ `Prediccion_Inteligente_FL_Tarde.xlsx` generado.")
