@@ -14,15 +14,17 @@ st.title("🌺 Análisis Inteligente - Florida (Tarde / Noche)")
 ARCHIVO_CSV = "Flotodo.csv"
 
 try:
-    # header=None + names=[] evita KeyError cuando el CSV no tiene fila de títulos
-    df_raw = pd.read_csv(
-        ARCHIVO_CSV, 
-        sep=';', 
-        encoding='utf-8-sig',
-        header=None,
-        names=['Fecha', 'Tipo_Sorteo', 'Centena', 'Fijo', '1er_Corrido', '2do_Corrido'],
-        dayfirst=True
-    )
+    # utf-8-sig elimina automáticamente el BOM que Excel agrega
+    df_raw = pd.read_csv(ARCHIVO_CSV, sep=';', encoding='utf-8-sig', dayfirst=True)
+    
+    # Limpiar nombres de columna por si quedan caracteres ocultos
+    df_raw.columns = df_raw.columns.str.strip().str.replace('\ufeff', '')
+    
+    # Verificar que existan las columnas mínimas
+    if 'Fecha' not in df_raw.columns or 'Tipo_Sorteo' not in df_raw.columns:
+        st.error("❌ El CSV no contiene las columnas 'Fecha' y 'Tipo_Sorteo'. Revisa la cabecera.")
+        st.stop()
+
 except FileNotFoundError:
     st.error(f"❌ No se encontró `{ARCHIVO_CSV}` en el repositorio.")
     st.info("💡 Asegúrate de que el archivo esté en la raíz del repo y se llame exactamente `Flotodo.csv`")
@@ -32,16 +34,22 @@ except Exception as e:
     st.stop()
 
 # ==========================================
-# 🧹 LIMPIEZA Y VALIDACIÓN
+# 🧹 LIMPIEZA Y CONVERSIÓN EXPLÍCITA
 # ==========================================
+# Normalizar Tipo_Sorteo
 df_raw['Tipo_Sorteo'] = df_raw['Tipo_Sorteo'].astype(str).str.strip().str.upper()
-df_valido = df_raw[df_raw['Tipo_Sorteo'].isin(['T', 'N'])].copy()
 
+# Filtrar solo T y N
+df_valido = df_raw[df_raw['Tipo_Sorteo'].isin(['T', 'N'])].copy()
 if df_valido.empty:
     st.error("⚠️ No hay sorteos de Tarde (T) o Noche (N) en el archivo.")
     st.stop()
 
+# 🔥 CONVERSIÓN EXPLÍCITA A DATETIME (CRÍTICO PARA .dt)
+df_valido['Fecha'] = pd.to_datetime(df_valido['Fecha'], dayfirst=True, errors='coerce')
 df_valido['Fijo'] = pd.to_numeric(df_valido['Fijo'], errors='coerce') % 100
+
+# Eliminar filas con fechas o números inválidos
 df_valido = df_valido.dropna(subset=['Fecha', 'Fijo']).sort_values('Fecha').reset_index(drop=True)
 
 st.sidebar.success(f"✅ `{ARCHIVO_CSV}` cargado: `{len(df_valido)}` sorteos válidos")
@@ -63,9 +71,11 @@ if dfa.empty:
     st.stop()
 
 # ==========================================
-# 🧠 CÁLCULO INTELIGENTE
+# 📊 CÁLCULO INTELIGENTE
 # ==========================================
 fecha_base = dfa['Fecha'].max()
+
+# ✅ Ahora .dt funcionará porque forzamos la conversión a datetime arriba
 dfa['Decena'] = (dfa['Fijo'] // 10).astype(int)
 dfa['Terminacion'] = (dfa['Fijo'] % 10).astype(int)
 dfa['DiaSemana'] = dfa['Fecha'].dt.day_name()
@@ -76,7 +86,7 @@ resultados = []
 for n in range(0, 100):
     dec, ter = n // 10, n % 10
     
-    # 1. Separación (Gap) desde última aparición
+    # 1. Separación (Gap)
     apariciones = dfa[dfa['Fijo'] == n]['Fecha']
     gap = (fecha_base - apariciones.max()).days if not apariciones.empty else 999
     
