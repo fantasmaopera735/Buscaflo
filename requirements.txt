@@ -9,3 +9,4 @@ python-dateutil
 gspread
 oauth2client
 google-auth
+openpyxl
