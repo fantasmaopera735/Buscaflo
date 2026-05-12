@@ -1,139 +1,100 @@
 import streamlit as st
 import pandas as pd
-import re
 import numpy as np
-from openpyxl import load_workbook
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
-# ==========================================
-# 🎨 CONFIGURACIÓN DE PÁGINA
-# ==========================================
-st.set_page_config(page_title="Análisis Inteligente FL Tarde", page_icon="🍑", layout="wide")
-st.title("🧠 Análisis Inteligente - Florida Tarde")
+st.set_page_config(page_title="Análisis Flotodo (T/N)", page_icon="🌺", layout="wide")
+st.title("🌺 Análisis Inteligente - Florida (Tarde / Noche)")
 
 # ==========================================
-# 📂 CONFIGURACIÓN DE ARCHIVOS
+# 📂 CARGA DE DATOS (Flotodo.csv)
 # ==========================================
-ARCHIVO_ENTRADA = 'david esgrima.xlsx'
-HOJA_OBJETIVO = 'TARDE 1 (1)'  # Si no existe, usará la primera hoja automáticamente
+st.sidebar.header("📁 Carga de Datos")
+RUTA_CSV = st.sidebar.text_input("Nombre del archivo CSV:", value="Flotodo.csv")
 
-# ==========================================
-# 🔍 FUNCIÓN DE CARGA ROBUSTA (OpenPyXL)
-# ==========================================
-@st.cache_data(ttl=3600)
-def cargar_datos_desde_excel():
-    try:
-        wb = load_workbook(ARCHIVO_ENTRADA, data_only=True)
-        ws = wb[HOJA_OBJETIVO] if HOJA_OBJETIVO in wb.sheetnames else wb.active
+df = pd.DataFrame()
+try:
+    # Carga con separador ; y detección automática de fechas DD/MM/AAAA
+    df_raw = pd.read_csv(RUTA_CSV, sep=';', parse_dates=['Fecha'], dayfirst=True)
+    
+    # Limpieza y estandarización de columnas
+    df_raw = df_raw.dropna(subset=['Fecha'])
+    df_raw['Tipo_Sorteo'] = df_raw['Tipo_Sorteo'].astype(str).str.strip().str.upper()
+    
+    # Validación: solo permitir T y N
+    sesiones_validas = df_raw['Tipo_Sorteo'].isin(['T', 'N'])
+    df_valido = df_raw[sesiones_validas].copy()
+    df_invalido = df_raw[~sesiones_validas]
+    
+    if not df_invalido.empty:
+        st.sidebar.warning(f"⚠️ Se ignoraron {len(df_invalido)} filas con sesiones distintas a T/N")
         
-        datos = []
-        limite_fin = date(2027, 12, 31)  # Permitir fechas hasta 2027
-        limite_inicio = date(2010, 1, 1)
-        
-        # Escanear toda la hoja buscando celdas con relleno ROJO
-        for row in ws.iter_rows():
-            for cell in row:
-                # Verificar color de relleno (rojo estándar o tema)
-                fill_rgb = str(getattr(cell.fill.start_color, 'rgb', '') or '').upper()
-                is_red = 'FF0000' in fill_rgb or 'C00000' in fill_rgb or fill_rgb.endswith('FF0000')
-                
-                if is_red:
-                    val = str(cell.value or '').strip()
-                    # Regex flexible: acepta 10/5/2026, 10-05-26, etc.
-                    match = re.search(r'(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{2,4})', val)
-                    if match:
-                        d, m, a = int(match.group(1)), int(match.group(2)), int(match.group(3))
-                        if a < 100: a += 2000
-                        try:
-                            fecha_dt = datetime(a, m, d)
-                            fecha = fecha_dt.date()
-                            if limite_inicio <= fecha <= limite_fin:
-                                # Buscar el número en la celda de JUSTO ABAJO
-                                celda_num = ws.cell(row=cell.row + 1, column=cell.column)
-                                num_raw = str(celda_num.value or '').upper().replace('O', '0').replace(' ', '').replace('ERROR:#N/A', '')
-                                
-                                if num_raw.isdigit() and len(num_raw) >= 2:
-                                    fijo = int(num_raw[-2:])  # Tu regla: últimos 2 dígitos
-                                    datos.append({
-                                        'Fecha': fecha_dt, 
-                                        'Numero': fijo, 
-                                        'Celda': cell.coordinate
-                                    })
-                        except: 
-                            continue
-        
-        if not datos:
-            return None, "⚠️ No se encontraron celdas ROJAS con fecha válida. Verifica que las fechas tengan relleno rojo y letra blanca."
-            
-        # Ordenar y eliminar duplicados
-        df = pd.DataFrame(datos).drop_duplicates(subset='Fecha').sort_values('Fecha').reset_index(drop=True)
-        ultima_fecha = df['Fecha'].max()
-        celda_ultima = df[df['Fecha'] == ultima_fecha]['Celda'].iloc[0]
-        
-        wb.close()
-        return df, f"✅ {len(df)} sorteos cargados. Última fecha: `{ultima_fecha.strftime('%d/%m/%Y')}` (Celda: `{celda_ultima}`)"
-        
-    except Exception as e:
-        return None, f"❌ Error leyendo Excel: {e}"
-
-# ==========================================
-# 🚀 EJECUCIÓN INICIAL
-# ==========================================
-df, msg = cargar_datos_desde_excel()
-if df is None:
-    st.error(msg)
-    with st.expander("🔍 Diagnóstico rápido"):
-        st.info("1. Verifica que `david esgrima.xlsx` esté en la carpeta raíz del repositorio.\n"
-                "2. Asegúrate de que `openpyxl` esté en `requirements.txt`.\n"
-                "3. Comprueba que las fechas tengan formato de celda `Relleno: Rojo` y `Fuente: Blanco`.")
+    # Extraer Fijo como número de 2 dígitos
+    df_valido['Fijo'] = pd.to_numeric(df_valido['Fijo'], errors='coerce') % 100
+    df = df_valido.dropna(subset=['Fijo']).sort_values('Fecha').reset_index(drop=True)
+    
+    st.sidebar.success(f"✅ {len(df)} sorteos cargados (T/N)")
+    
+except Exception as e:
+    st.sidebar.error(f"❌ Error cargando CSV: {e}\nVerifica que '{RUTA_CSV}' esté en la misma carpeta.")
     st.stop()
-st.success(msg)
+
+if df.empty:
+    st.warning("No hay datos válidos después de filtrar. Revisa el archivo CSV.")
+    st.stop()
 
 # ==========================================
-# 📊 CÁLCULO DE MÉTRICAS Y PROYECCIÓN
+# 🎛️ FILTRO POR SESIÓN
 # ==========================================
-fecha_base = df['Fecha'].max()
-dia_objetivo = fecha_base + pd.Timedelta(days=1)
-nombre_dia = dia_objetivo.strftime('%A')
+modo = st.sidebar.radio("🔍 Filtro de sesión:", ["General (T+N)", "Tarde (T)", "Noche (N)"], index=0)
 
-st.info(f"📅 Fecha base detectada: `{fecha_base.strftime('%d/%m/%Y')}`")
-st.info(f"🎯 Próximo sorteo proyectado: **{dia_objetivo.strftime('%d/%m/%Y')} ({nombre_dia})**")
+if modo == "Tarde (T)":
+    dfa = df[df['Tipo_Sorteo'] == 'T'].copy()
+elif modo == "Noche (N)":
+    dfa = df[df['Tipo_Sorteo'] == 'N'].copy()
+else:
+    dfa = df.copy()
 
-# Columnas base
-df['Decena'] = (df['Numero'] // 10).astype(int)
-df['Terminacion'] = (df['Numero'] % 10).astype(int)
-df['Suma'] = df['Numero'].apply(lambda x: (x//10) + (x%10))
-df['DiaSemana'] = df['Fecha'].dt.day_name()
+if dfa.empty:
+    st.warning(f"⚠️ No hay datos disponibles para: {modo}")
+    st.stop()
 
-# Cálculo de puntuación para los 100 números
+# ==========================================
+# 📊 ANÁLISIS INTELIGENTE (Gap + Frecuencia + Puntuación)
+# ==========================================
+fecha_base = dfa['Fecha'].max()
+dfa['Decena'] = (dfa['Fijo'] // 10).astype(int)
+dfa['Terminacion'] = (dfa['Fijo'] % 10).astype(int)
+dfa['DiaSemana'] = dfa['Fecha'].dt.day_name()
+
 resultados = []
 for n in range(0, 100):
     dec, ter = n // 10, n % 10
     
-    # 1. Separación (Gap) desde última aparición
-    apariciones = df[df['Numero'] == n]['Fecha']
+    # 1. Separación (Gap) desde última aparición en la sesión seleccionada
+    apariciones = dfa[dfa['Fijo'] == n]['Fecha']
     gap = (fecha_base - apariciones.max()).days if not apariciones.empty else 999
     
     # 2. Tendencia escalonada (últimas 3 decenas)
-    ultimas_dec = df.tail(3)['Decena'].tolist()
+    ultimas_dec = dfa.tail(3)['Decena'].tolist()
     tendencia = 0
     if len(ultimas_dec) == 3:
         if ultimas_dec[0] < ultimas_dec[1] < ultimas_dec[2] and dec == ultimas_dec[2] + 1: tendencia = 15
         elif ultimas_dec[0] > ultimas_dec[1] > ultimas_dec[2] and dec == ultimas_dec[2] - 1: tendencia = 15
             
     # 3. Frecuencia histórica en este día de la semana (últimos 6 meses)
-    hace_180 = fecha_base - pd.Timedelta(days=180)
-    freq_dia = len(df[(df['Fecha'] >= hace_180) & (df['DiaSemana'] == nombre_dia) & (df['Numero'] == n)])
+    hace_180 = fecha_base - timedelta(days=180)
+    freq_dia = len(dfa[(dfa['Fecha'] >= hace_180) & (dfa['DiaSemana'] == datetime.now().day_name()) & (dfa['Fijo'] == n)])
     
-    # 4. Fórmula de Puntuación (Ajustable según tu experiencia)
+    # 4. Fórmula de Puntuación
     pts = 0
-    if 20 <= gap <= 45: pts += 20      # Zona dulce de separación
+    if 20 <= gap <= 45: pts += 20      # Zona dulce
     elif gap > 45: pts += 10           # Presión alta
-    pts += tendencia                   # Tendencia de decena
+    pts += tendencia                   # Tendencia
     if freq_dia >= 3: pts += 12        # Día fuerte
-    if 8 <= (dec + ter) <= 14: pts += 5 # Suma en rango frecuente
+    if 8 <= (dec + ter) <= 14: pts += 5 # Suma frecuente
     
     resultados.append({
         'Numero': n, 'Decena': dec, 'Terminacion': ter, 
@@ -149,18 +110,20 @@ df_scores = df_scores.sort_values('Puntaje', ascending=False).reset_index(drop=T
 # ==========================================
 # 💾 RENDERIZADO EN STREAMLIT
 # ==========================================
+st.success(f"📅 Última fecha analizada: `{fecha_base.strftime('%d/%m/%Y')}` | Sesión: **{modo}**")
+
 col1, col2 = st.columns([2, 1])
 with col1:
     st.subheader("🏆 Top 10 Proyección")
     st.dataframe(df_scores.head(10), use_container_width=True, hide_index=True)
 
 with col2:
-    st.subheader("📊 Resumen del Modelo")
+    st.subheader("📊 Resumen")
     st.metric("🔴 JUGAR", len(df_scores[df_scores['Estado']=='🔴 JUGAR']))
     st.metric("🟡 OBSERVAR", len(df_scores[df_scores['Estado']=='🟡 OBSERVAR']))
-    st.metric("📅 Proyección", f"{dia_objetivo.strftime('%A %d/%m')}")
+    st.metric("📅 Próximo", (fecha_base + timedelta(days=1)).strftime('%A %d/%m'))
 
 st.divider()
 if st.button("📥 Descargar Excel con análisis completo", use_container_width=True):
-    df_scores.to_excel('Prediccion_Inteligente_FL_Tarde.xlsx', index=False)
-    st.success("✅ `Prediccion_Inteligente_FL_Tarde.xlsx` generado en la carpeta raíz.")
+    df_scores.to_excel('Prediccion_Flotodo.xlsx', index=False)
+    st.success("✅ `Prediccion_Flotodo.xlsx` generado.")
